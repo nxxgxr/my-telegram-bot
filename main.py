@@ -1,9 +1,10 @@
+измени код,чтобы оно выводило в таблице гугл в колонке d время покупки по калининградскому времени
+
 import os
 import logging
 import random
 import string
 from datetime import datetime
-import pytz
 
 from flask import Flask
 from threading import Thread
@@ -53,13 +54,7 @@ def append_license_to_sheet(license_key, username):
     creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPE)
     client = gspread.authorize(creds)
     sheet = client.open(SPREADSHEET_NAME).sheet1
-
-    # Время по Калининградскому времени
-    kaliningrad_tz = pytz.timezone('Europe/Kaliningrad')
-    now_klgd = datetime.now(kaliningrad_tz)
-    now_str = now_klgd.strftime("%Y-%m-%d %H:%M:%S")
-
-    # Записываем: [license_key, пусто, username, время]
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     sheet.append_row([license_key, "", username, now_str])
 
 def get_keyboard(buttons):
