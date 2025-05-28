@@ -8,7 +8,7 @@ import pytz  # для работы с часовыми поясами
 from flask import Flask
 from threading import Thread
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 import gspread
@@ -54,9 +54,10 @@ def append_license_to_sheet(license_key, username):
     client = gspread.authorize(creds)
     sheet = client.open(SPREADSHEET_NAME).sheet1
 
-    # Получаем текущее время в Калининградском часовом поясе
+    # Получаем текущее время в Калининградском часовом поясе (корректно с учётом UTC)
     kaliningrad_tz = pytz.timezone("Europe/Kaliningrad")
-    now_kaliningrad = datetime.now(kaliningrad_tz)
+    now_utc = datetime.utcnow().replace(tzinfo=pytz.utc)
+    now_kaliningrad = now_utc.astimezone(kaliningrad_tz)
     now_str = now_kaliningrad.strftime("%Y-%m-%d %H:%M:%S")
 
     # Записываем в строки: ключ (A), пусто (B), имя пользователя (C), время покупки (D)
@@ -65,14 +66,14 @@ def append_license_to_sheet(license_key, username):
 def get_keyboard(buttons):
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update: 'telegram.Update', context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Добро пожаловать в Valture — профессиональный инструмент для геймеров, которые ценят максимальную производительность и стабильность!\n\n"
         "Нажмите кнопку ниже, чтобы открыть меню.",
         reply_markup=get_keyboard([("📋 Меню", "menu_main")])
     )
 
-async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def main_menu(update: 'telegram.Update', context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     buttons = [
@@ -83,7 +84,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await query.edit_message_text("🏠 Главное меню. Выберите раздел:", reply_markup=get_keyboard(buttons))
 
-async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def about(update: 'telegram.Update', context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
@@ -112,7 +113,7 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def pay(update: 'telegram.Update', context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
@@ -126,7 +127,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def pay_confirm(update: 'telegram.Update', context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
@@ -136,7 +137,7 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(f"✅ Вот ваш лицензионный ключ:\n\n`{license_key}`", parse_mode="Markdown")
 
-async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def support(update: 'telegram.Update', context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
@@ -146,7 +147,7 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = [("🏠 Главное меню", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def faq(update: 'telegram.Update', context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
@@ -161,7 +162,7 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = [("🏠 Главное меню", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_handler(update: 'telegram.Update', context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
