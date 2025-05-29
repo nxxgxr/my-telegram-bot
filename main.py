@@ -1,13 +1,12 @@
 import os
 import logging
-import random
-import string
+import secrets
 from datetime import datetime, timezone, timedelta
-
-from flask import Flask
 from threading import Thread
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from flask import Flask
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 import gspread
@@ -45,44 +44,75 @@ def run_flask():
 
 # --- Логика Telegram бота ---
 
+# Кэш для данных Google Sheets
+sheet_cache = None
+
+def get_sheet():
+    """Получение кэшированного объекта Google Sheets."""
+    global sheet_cache
+    if sheet_cache is None:
+        creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPE)
+        client = gspread.authorize(creds)
+        sheet_cache = client.open(SPREADSHEET_NAME).sheet1
+    return sheet_cache
+
 def generate_license(length=32):
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+    """Генерация безопасного лицензионного ключа."""
+    return ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(length))
 
 def append_license_to_sheet(license_key, username):
-    creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPE)
-    client = gspread.authorize(creds)
-    sheet = client.open(SPREADSHEET_NAME).sheet1
+    """Добавление лицензии в Google Sheets."""
+    try:
+        sheet = get_sheet()
+        utc_plus_2 = timezone(timedelta(hours=2))
+        now_utc_plus_2 = datetime.now(utc_plus_2)
+        now_str = now_utc_plus_2.strftime("%Y-%m-%d %H:%M:%S")
+        sheet.append_row([license_key, "", username, now_str])
+        logger.info(f"Лицензия {license_key} добавлена для {username}")
+    except Exception as e:
+        logger.error(f"Ошибка при добавлении лицензии: {e}")
+        raise
 
-    # Время UTC+2 (фиксированное смещение)
-    utc_plus_2 = timezone(timedelta(hours=2))
-    now_utc_plus_2 = datetime.now(utc_plus_2)
-    now_str = now_utc_plus_2.strftime("%Y-%m-%d %H:%M:%S")
-
-    # Записываем в колонки: A - ключ, B - пусто, C - имя пользователя, D - время покупки
-    sheet.append_row([license_key, "", username, now_str])
+def check_license_validity(license_key):
+    """Проверка валидности лицензионного ключа."""
+    try:
+        sheet = get_sheet()
+        keys = sheet.col_values(1)
+        return license_key in keys
+    except Exception as e:
+        logger.error(f"Ошибка проверки лицензии: {e}")
+        return False
 
 def get_keyboard(buttons):
+    """Создание клавиатуры с кнопками."""
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
 
-async def start(update: "Update", context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Добро пожаловать в Valture — профессиональный инструмент для геймеров, которые ценят максимальную производительность и стабильность!\n\n"
-        "Нажмите кнопку ниже, чтобы открыть меню.",
-        reply_markup=get_keyboard([("📋 Меню", "menu_main")])
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /start."""
+    welcome_text = (
+        "👋 *Добро пожаловать в Valture!*\n\n"
+        "Мы предлагаем профессиональный инструмент для геймеров, "
+        "которые стремятся к максимальной производительности и стабильности.\n\n"
+        "Выберите действие в меню ниже:"
     )
+    await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_keyboard([("📋 Открыть меню", "menu_main")]))
 
-async def main_menu(update: "Update", context: ContextTypes.DEFAULT_TYPE):
+async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отображение главного меню."""
     query = update.callback_query
     await query.answer()
     buttons = [
-        ("💳 Оплата", "menu_pay"),
+        ("💳 Купить лицензию", "menu_pay"),
+        ("🔑 Проверить ключ", "menu_check_license"),
         ("📞 Поддержка", "menu_support"),
         ("❓ FAQ", "menu_faq"),
         ("ℹ️ О приложении", "menu_about"),
+        ("📰 Новости", "menu_news"),
     ]
-    await query.edit_message_text("🏠 Главное меню. Выберите раздел:", reply_markup=get_keyboard(buttons))
+    await query.edit_message_text("🏠 *Главное меню*\n\nВыберите раздел:", parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def about(update: "Update", context: ContextTypes.DEFAULT_TYPE):
+async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Информация о приложении."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -102,65 +132,102 @@ async def about(update: "Update", context: ContextTypes.DEFAULT_TYPE):
         "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "🔋 Полная настройка Windows\n\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        "_Создано для геймеров, которые ценят максимальную производительность и стабильность._"
+        "_Создано для геймеров, которые ценят качество._"
     )
     buttons = [
-        ("💳 Оплата", "menu_pay"),
+        ("💳 Купить лицензию", "menu_pay"),
         ("📞 Поддержка", "menu_support"),
-        ("❓ FAQ", "menu_faq"),
+        ("🏠 Главное меню", "menu_main"),
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def pay(update: "Update", context: ContextTypes.DEFAULT_TYPE):
+async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню оплаты."""
     query = update.callback_query
     await query.answer()
     text = (
-        "💳 *Оплата лицензии Valture*\n\n"
-        "цена 1000 рублей.\n"
-        "После оплаты лицензия будет автоматически выслана вам в чат.\n"
-        "Нажмите кнопку ниже, чтобы получить лицензию."
+        "💳 *Приобретение лицензии Valture*\n\n"
+        "Стоимость: *1000 рублей*\n"
+        "После оплаты вы получите уникальный ключ прямо в чат.\n\n"
+        "Готовы продолжить?"
     )
-    buttons = [
-        ("оплатить", "pay_confirm"),
-    ]
+    buttons = [("✅ Оплатить", "pay_confirm"), ("🏠 Главное меню", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def pay_confirm(update: "Update", context: ContextTypes.DEFAULT_TYPE):
+async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение оплаты и выдача ключа."""
     query = update.callback_query
     await query.answer()
+    try:
+        license_key = generate_license()
+        username = query.from_user.username or query.from_user.full_name
+        append_license_to_sheet(license_key, username)
+        text = (
+            "🎉 *Поздравляем с покупкой!*\n\n"
+            "Ваш лицензионный ключ:\n"
+            f"`{license_key}`\n\n"
+            "Сохраните его в надежном месте!"
+        )
+        await query.edit_message_text(text, parse_mode="Markdown")
+    except Exception:
+        await query.edit_message_text(
+            "❌ *Ошибка*\n\nНе удалось сгенерировать ключ. Попробуйте позже или обратитесь в поддержку.",
+            parse_mode="Markdown"
+        )
 
-    license_key = generate_license()
-    username = query.from_user.username or query.from_user.full_name
-    append_license_to_sheet(license_key, username)
+async def check_license(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка лицензии (заглушка)."""
+    query = update.callback_query
+    await query.answer()
+    text = (
+        "🔑 *Проверка лицензии*\n\n"
+        "Пожалуйста, отправьте ваш ключ в чат, чтобы проверить его валидность."
+    )
+    await query.edit_message_text(text, parse_mode="Markdown")
 
-    await query.edit_message_text(f"✅ Вот ваш лицензионный ключ:\n\n`{license_key}`", parse_mode="Markdown")
-
-async def support(update: "Update", context: ContextTypes.DEFAULT_TYPE):
+async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню поддержки."""
     query = update.callback_query
     await query.answer()
     text = (
         "📞 *Поддержка Valture*\n\n"
-        "Если у вас возникли вопросы, пишите сюда: @your_support_username"
+        "Возникли вопросы? Свяжитесь с нами:\n"
+        "👉 *@your_support_username*\n\n"
+        "Мы ответим максимально быстро!"
     )
     buttons = [("🏠 Главное меню", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def faq(update: "Update", context: ContextTypes.DEFAULT_TYPE):
+async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Часто задаваемые вопросы."""
     query = update.callback_query
     await query.answer()
     text = (
         "❓ *FAQ*\n\n"
-        "1. Как получить лицензию?\n"
-        "- Используйте кнопку 'оплатить' в меню оплаты.\n\n"
-        "2. Что делать, если ключ не работает?\n"
-        "- Свяжитесь с поддержкой.\n\n"
-        "3. Можно ли использовать на нескольких устройствах?\n"
-        "- Нет, ключ привязан к одному устройству."
+        "**1. Как получить лицензию?**\n"
+        "Перейдите в раздел 'Купить лицензию' и следуйте инструкциям.\n\n"
+        "**2. Что делать, если ключ не работает?**\n"
+        "Напишите в поддержку — мы поможем!\n\n"
+        "**3. Можно ли использовать ключ на нескольких устройствах?**\n"
+        "Нет, ключ привязан к одному устройству."
     )
     buttons = [("🏠 Главное меню", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def button_handler(update: "Update", context: ContextTypes.DEFAULT_TYPE):
+async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Раздел новостей."""
+    query = update.callback_query
+    await query.answer()
+    text = (
+        "📰 *Новости Valture*\n\n"
+        "Следите за обновлениями здесь!\n"
+        "Пока новых сообщений нет."
+    )
+    buttons = [("🏠 Главное меню", "menu_main")]
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик нажатий кнопок."""
     query = update.callback_query
     data = query.data
 
@@ -170,18 +237,22 @@ async def button_handler(update: "Update", context: ContextTypes.DEFAULT_TYPE):
         await pay(update, context)
     elif data == "pay_confirm":
         await pay_confirm(update, context)
+    elif data == "menu_check_license":
+        await check_license(update, context)
     elif data == "menu_support":
         await support(update, context)
     elif data == "menu_faq":
         await faq(update, context)
     elif data == "menu_about":
         await about(update, context)
+    elif data == "menu_news":
+        await news(update, context)
 
 if __name__ == "__main__":
-    # Запускаем Flask в отдельном потоке (keep alive)
+    # Запуск Flask в отдельном потоке
     Thread(target=run_flask).start()
 
-    # Запускаем бота
+    # Запуск бота
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
