@@ -58,7 +58,7 @@ def get_sheet():
 
 def generate_license(length=32):
     """Генерация безопасного лицензионного ключа."""
-    return ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(length))
+    return ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
 
 def append_license_to_sheet(license_key, username):
     """Добавление лицензии в Google Sheets."""
