@@ -25,7 +25,7 @@ SCOPE = [
     "https://www.googleapis.com/auth/drive",
 ]
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "YOUR_ADMIN_CHAT_ID")
+ADMIN_USERNAME = "@s3pt1ck"  # Уведомления будут отправляться только этому пользователю
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://your-app-name.onrender.com/webhook")
 
 # --- Логирование ---
@@ -74,15 +74,31 @@ async def send_progress_message(update: Update, context: ContextTypes.DEFAULT_TY
         await msg.edit_text(f"{message}\n{stage} ⚡", parse_mode="Markdown")
     return msg
 
-async def notify_admin(user: dict, action: str):
+async def get_admin_chat_id(bot: Bot) -> str:
+    """Получение Telegram ID админа по username."""
+    cache_key = "admin_chat_id"
+    cached = await redis_client.get(cache_key)
+    if cached:
+        return cached
+    try:
+        chat = await bot.get_chat(ADMIN_USERNAME)
+        chat_id = str(chat.id)
+        await redis_client.setex(cache_key, 86400, chat_id)  # Кэшируем на 24 часа
+        logger.info(f"Получен chat_id для {ADMIN_USERNAME}: {chat_id}")
+        return chat_id
+    except Exception as e:
+        logger.error(f"Ошибка при получении chat_id для {ADMIN_USERNAME}: {e}")
+        raise
+
+async def notify_admin(bot: Bot, user: dict, action: str):
     """Отправка уведомления админу о действиях пользователя."""
     username = user.get('username', user.get('first_name', 'Неизвестный пользователь'))
     if username.startswith('@'):
         username = username[1:]
-    bot = Bot(BOT_TOKEN)
     try:
+        admin_chat_id = await get_admin_chat_id(bot)
         await bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
+            chat_id=admin_chat_id,
             text=(
                 f"🔔 *Действие пользователя* ⚡\n"
                 "┌────────────────────────┐\n"
@@ -132,8 +148,9 @@ async def append_license_to_sheet(license_key: str, username: str):
         logger.info(f"Лицензия {license_key} добавлена для {username}")
         # Уведомление админа с ASCII-артом
         bot = Bot(BOT_TOKEN)
+        admin_chat_id = await get_admin_chat_id(bot)
         await bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
+            chat_id=admin_chat_id,
             text=(
                 "🔔 *Новая лицензия!* ⚡\n"
                 "┌────────────────────────┐\n"
@@ -153,7 +170,9 @@ async def append_license_to_sheet(license_key: str, username: str):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start."""
     user = update.effective_user
-    await notify_admin(user, "Нажал /start")
+    bot = context.bot
+    # Отправка уведомления в фоновом режиме
+    asyncio.create_task(notify_admin(bot, user, "Нажал /start"))
     welcome_text = (
         "👋 *Добро пожаловать в Valture!* ⚡\n\n"
         "Мы предлагаем профессиональный инструмент для геймеров, "
@@ -168,7 +187,9 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отображение главного меню."""
     query = update.callback_query
     await query.answer()
-    await notify_admin(query.from_user, "Открыл главное меню")
+    bot = context.bot
+    # Отправка уведомления в фоновом режиме
+    asyncio.create_task(notify_admin(bot, query.from_user, "Открыл главное меню"))
     buttons = [
         ("ℹ️ О приложении", "menu_about"),
         ("📰 Новости", "menu_news"),
@@ -187,7 +208,9 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Информация о приложении."""
     query = update.callback_query
     await query.answer()
-    await notify_admin(query.from_user, "Выбрал 'О приложении'")
+    bot = context.bot
+    # Отправка уведомления в фоновом режиме
+    asyncio.create_task(notify_admin(bot, query.from_user, "Выбрал 'О приложении'"))
     text = (
         "✨ *Valture — Ваш путь к совершенству в играх* ⚡\n\n"
         "Valture — это передовой инструмент, созданный для геймеров, которые не готовы мириться с компромиссами. "
@@ -209,7 +232,9 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Меню оплаты."""
     query = update.callback_query
     await query.answer()
-    await notify_admin(query.from_user, "Выбрал 'Купить лицензию'")
+    bot = context.bot
+    # Отправка уведомления в фоновом режиме
+    asyncio.create_task(notify_admin(bot, query.from_user, "Выбрал 'Купить лицензию'"))
     text = (
         "💳 *Приобретение лицензии Valture* ⚡\n\n"
         "Стоимость: *1000 рублей*\n"
@@ -223,7 +248,9 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Подтверждение оплаты и выдача ключа с ASCII-артом."""
     query = update.callback_query
     await query.answer()
-    await notify_admin(query.from_user, "Подтвердил покупку")
+    bot = context.bot
+    # Отправка уведомления в фоновом режиме
+    asyncio.create_task(notify_admin(bot, query.from_user, "Подтвердил покупку"))
     async with limiter:
         try:
             license_key = generate_license()
@@ -251,7 +278,9 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Меню поддержки."""
     query = update.callback_query
     await query.answer()
-    await notify_admin(query.from_user, "Выбрал 'Поддержка'")
+    bot = context.bot
+    # Отправка уведомления в фоновом режиме
+    asyncio.create_task(notify_admin(bot, query.from_user, "Выбрал 'Поддержка'"))
     text = (
         "📞 *Поддержка Valture* ⚡\n\n"
         "Возникли вопросы? Свяжитесь с нами:\n"
@@ -265,7 +294,9 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Часто задаваемые вопросы."""
     query = update.callback_query
     await query.answer()
-    await notify_admin(query.from_user, "Выбрал 'FAQ'")
+    bot = context.bot
+    # Отправка уведомления в фоновом режиме
+    asyncio.create_task(notify_admin(bot, query.from_user, "Выбрал 'FAQ'"))
     text = (
         "❓ *FAQ* ⚡\n\n"
         "**1. Как получить лицензию?**\n"
@@ -282,7 +313,9 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Раздел новостей."""
     query = update.callback_query
     await query.answer()
-    await notify_admin(query.from_user, "Выбрал 'Новости'")
+    bot = context.bot
+    # Отправка уведомления в фоновом режиме
+    asyncio.create_task(notify_admin(bot, query.from_user, "Выбрал 'Новости'"))
     text = (
         "📰 *Новости Valture* ⚡\n\n"
         "Следите за обновлениями здесь!\n"
@@ -295,7 +328,9 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отображение статистики лицензий с анимированным графиком."""
     query = update.callback_query
     await query.answer()
-    await notify_admin(query.from_user, "Выбрал 'Статистика'")
+    bot = context.bot
+    # Отправка уведомления в фоновом режиме
+    asyncio.create_task(notify_admin(bot, query.from_user, "Выбрал 'Статистика'"))
     try:
         sheet = await get_sheet()
         licenses = sheet.get_all_values()[1:]  # Пропускаем заголовок
