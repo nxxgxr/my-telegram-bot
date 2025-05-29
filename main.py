@@ -1,26 +1,31 @@
 import os
 import logging
 import secrets
+import redis.asyncio as redis
 from datetime import datetime, timezone, timedelta
 from threading import Thread
+import json
+from typing import List
 
-from flask import Flask
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from flask import Flask, request
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, Bot
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-
 import gspread
 from google.oauth2.service_account import Credentials
+from aiolimiter import AsyncLimiter
 
 # --- Настройки ---
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN") or "7941872387:AAGZayILmna-qHHyQy5V50wDGylo3yFCZ0A"
+BOT_TOKEN = os.environ.get("BOT_TOKEN") or "YOUR_BOT_TOKEN"
 CREDS_FILE = "valture-license-bot-account.json"
 SPREADSHEET_NAME = "valture"
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "YOUR_ADMIN_CHAT_ID")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://your-app-name.onrender.com/webhook")
 
 # --- Логирование ---
 
@@ -30,7 +35,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Flask для keep-alive ---
+# --- Flask для keep-alive и вебхуков ---
 
 app = Flask(__name__)
 
@@ -38,57 +43,82 @@ app = Flask(__name__)
 def home():
     return "✅ Valture бот работает!"
 
+@app.route('/webhook', methods=['POST'])
+async def webhook():
+    update = Update.de_json(request.get_json(), application.bot)
+    await application.process_update(update)
+    return "OK", 200
+
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# --- Логика Telegram бота ---
+# --- Инициализация Redis и лимитера ---
 
-# Кэш для данных Google Sheets
-sheet_cache = None
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+limiter = AsyncLimiter(max_rate=10, time_period=60)  # 10 запросов в минуту на пользователя
 
-def get_sheet():
-    """Получение кэшированного объекта Google Sheets."""
-    global sheet_cache
-    if sheet_cache is None:
-        try:
-            creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPE)
-            client = gspread.authorize(creds)
-            sheet_cache = client.open(SPREADSHEET_NAME).sheet1
-            logger.info("Успешно подключено к Google Sheets")
-        except Exception as e:
-            logger.error(f"Ошибка подключения к Google Sheets: {e}")
-            raise
-    return sheet_cache
+# --- Логика Google Sheets ---
 
-def generate_license(length=32):
-    """Генерация безопасного лицензионного ключа."""
+async def get_sheet():
+    """Получение кэшированного объекта Google Sheets из Redis."""
+    cache_key = "google_sheet_client"
+    cached = await redis_client.get(cache_key)
+    if cached:
+        logger.info("Используется кэшированный доступ к Google Sheets")
+        return gspread.authorize(Credentials.from_json(json.loads(cached)))
     try:
-        key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
-        logger.info(f"Сгенерирован ключ: {key}")
-        return key
+        creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPE)
+        client = gspread.authorize(creds)
+        sheet = client.open(SPREADSHEET_NAME).sheet1
+        await redis_client.setex(cache_key, 3600, json.dumps(creds.to_json()))
+        logger.info("Успешно подключено к Google Sheets")
+        return sheet
     except Exception as e:
-        logger.error(f"Ошибка при генерации ключа: {e}")
+        logger.error(f"Ошибка подключения к Google Sheets: {e}")
         raise
 
-def append_license_to_sheet(license_key, username):
-    """Добавление лицензии в Google Sheets."""
+def generate_license(length: int = 32) -> str:
+    """Генерация безопасного лицензионного ключа."""
+    key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
+    logger.info(f"Сгенерирован ключ: {key}")
+    return key
+
+async def append_license_to_sheet(license_key: str, username: str):
+    """Добавление лицензии в Google Sheets и уведомление админа."""
     try:
-        sheet = get_sheet()
+        sheet = await get_sheet()
         utc_plus_2 = timezone(timedelta(hours=2))
-        now_utc_plus_2 = datetime.now(utc_plus_2)
-        now_str = now_utc_plus_2.strftime("%Y-%m-%d %H:%M:%S")
+        now_str = datetime.now(utc_plus_2).strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([license_key, "", username, now_str])
         logger.info(f"Лицензия {license_key} добавлена для {username}")
+        # Уведомление админа
+        bot = Bot(BOT_TOKEN)
+        await bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=f"🔔 Новая лицензия!\nПользователь: {username}\nКлюч: `{license_key}`",
+            parse_mode="Markdown"
+        )
     except Exception as e:
         logger.error(f"Ошибка при добавлении лицензии: {e}")
         raise
 
-def get_keyboard(buttons):
-    """Создание клавиатуры с кнопками."""
-    return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
+# --- Интерактивные элементы ---
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def get_keyboard(buttons: List[tuple]) -> InlineKeyboardMarkup:
+    """Создание клавиатуры с анимацией кнопок."""
+    return InlineKeyboardMarkup([[InlineKeyboardButton(f"{'⏳ ' if i == 0 else ''}{text}", callback_data=callback)] for i, (text, callback) in enumerate(buttons)])
+
+async def send_progress_message(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str):
+    """Отправка сообщения с прогресс-баром."""
+    progress = "█" * 5 + "▒" * 5
+    await update.message.reply_text(f"{message}\n{progress}", parse_mode="Markdown")
+
+# --- Обработчики команд ---
+
+async def start(update: Update, context: ContextTypes
+
+.DEFAULT_TYPE):
     """Обработчик команды /start."""
     welcome_text = (
         "👋 *Добро пожаловать в Valture!*\n\n"
@@ -96,7 +126,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "которые стремятся к максимальной производительности и стабильности.\n\n"
         "Выберите действие в меню ниже:"
     )
-    await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_keyboard([("📋 Открыть меню", "menu_main")]))
+    await send_progress_message(update, context, welcome_text)
+    buttons = [("📋 Открыть меню", "menu_main")]
+    await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отображение главного меню."""
@@ -108,10 +140,11 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ("💳 Купить лицензию", "menu_pay"),
         ("❓ FAQ", "menu_faq"),
         ("📞 Поддержка", "menu_support"),
+        ("📊 Статистика", "menu_stats"),
     ]
     await query.edit_message_text("🏠 *Главное меню*\n\nВыберите раздел:", parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def about update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Информация о приложении."""
     query = update.callback_query
     await query.answer()
@@ -122,18 +155,16 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Наша миссия — вывести вашу игровую производительность на новый уровень, обеспечив максимальную плавность, "
         "стабильность и отзывчивость системы. С Valture вы получите конкурентное преимущество, о котором всегда мечтали.\n\n"
         "🔥 *Почему выбирают Valture?*\n"
-        "🚀 Увеличение FPS на 20–30%: Оптимизируйте производительность вашей системы, чтобы добиться максимальной частоты кадров.\n"
-        "🛡️ Стабильный фреймрейт: Забудьте о лагах и просадках FPS — Valture обеспечивает плавный игровой процесс.\n"
-        "💡 Молниеносная отзывчивость: Сократите время отклика системы, чтобы каждый ваш клик или движение были мгновенными.\n"
-        "🔋 Оптимизация Windows: Полная настройка операционной системы для максимальной производительности в играх.\n"
-        "🛳️  Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
-        "🖥️  Плавность картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
+        "🚀 Увеличение FPS на 20–30%\n"
+        "🛡️ Стабильный фреймрейт\n"
+        "💡 Молниеносная отзывчивость\n"
+        "🔋 Оптимизация Windows\n"
+        "🛳️ Плавность управления\n"
+        "🖥️ Плавность картинки\n\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "_Создано для геймеров, которые ценят качество и стремятся к победе._"
     )
-    buttons = [
-        ("🔙 Назад", "menu_main"),
-    ]
+    buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -153,23 +184,24 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Подтверждение оплаты и выдача ключа."""
     query = update.callback_query
     await query.answer()
-    try:
-        license_key = generate_license()
-        username = query.from_user.username or query.from_user.full_name
-        append_license_to_sheet(license_key, username)
-        text = (
-            "🎉 *Поздравляем с покупкой!*\n\n"
-            "Ваш лицензионный ключ:\n"
-            f"`{license_key}`\n\n"
-            "Сохраните его в надежном месте!"
-        )
-        await query.edit_message_text(text, parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"Ошибка при генерации ключа: {e}")
-        await query.edit_message_text(
-            "❌ *Ошибка*\n\nНе удалось сгенерировать ключ. Попробуйте позже или обратитесь в поддержку (@s3pt1ck).",
-            parse_mode="Markdown"
-        )
+    async with limiter:
+        try:
+            license_key = generate_license()
+            username = query.from_user.username or query.from_user.full_name
+            await append_license_to_sheet(license_key, username)
+            text = (
+                "🎉 *Поздравляем с покупкой!*\n\n"
+                "Ваш лицензионный ключ:\n"
+                f"`{license_key}`\n\n"
+                "Сохраните его в надежном месте!"
+            )
+            await query.edit_message_text(text, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Ошибка при генерации ключа: {e}")
+            await query.edit_message_text(
+                "❌ *Ошибка*\n\nНе удалось сгенерировать ключ. Попробуйте позже или обратитесь в поддержку (@s3pt1ck).",
+                parse_mode="Markdown"
+            )
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Меню поддержки."""
@@ -182,7 +214,7 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Мы ответим максимально быстро!"
     )
     buttons = [("🔙 Назад", "menu_main")]
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+    await query.edit_message_text(text, parse_mode="Markdown大批, reply_markup=get_keyboard(buttons))
 
 async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Часто задаваемые вопросы."""
@@ -212,35 +244,98 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отображение статистики лицензий."""
+    query = update.callback_query
+    await query.answer()
+    try:
+        sheet = await get_sheet()
+        licenses = sheet.get_all_values()[1:]  # Пропускаем заголовок
+        total_licenses = len(licenses)
+        active_users = len(set(row[2] for row in licenses))
+        chart_data = {
+            "type": "bar",
+            "data": {
+                "labels": ["Всего лицензий", "Активные пользователи"],
+                "datasets": [{
+                    "label": "Valture Stats",
+                    "data": [total_licenses, active_users],
+                    "backgroundColor": ["#36A2EB", "#FF6384"],
+                    "borderColor": ["#2A80C1", "#D65673"],
+                    "borderWidth": 1
+                }]
+            },
+            "options": {
+                "scales": {
+                    "y": {
+                        "beginAtZero": True
+                    }
+                },
+                "plugins": {
+                    "legend": {
+                        "display": True,
+                        "position": "top"
+                    }
+                }
+            }
+        }
+        await query.edit_message_text(
+            f"📊 *Статистика Valture*\n\nВсего лицензий: {total_licenses}\nАктивные пользователи: {active_users}",
+            parse_mode="Markdown",
+            reply_markup=get_keyboard([("🔙 Назад", "menu_main")])
+        )
+        # Встраивание Chart.js графика
+        await query.message.reply_html(
+            f"""
+            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+            <canvas id="statsChart" width="400" height="200"></canvas>
+            <script>
+                new Chart(document.getElementById('statsChart'), {json.dumps(chart_data)});
+            </script>
+            """
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при получении статистики: {e}")
+        await query.edit_message_text(
+            "❌ *Ошибка*\n\nНе удалось загрузить статистику. Попробуйте позже или обратитесь в поддержку (@s3pt1ck).",
+            parse_mode="Markdown"
+        )
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик нажатий кнопок."""
     query = update.callback_query
     data = query.data
+    handlers = {
+        "menu_main": main_menu,
+        "menu_pay": pay,
+        "pay_confirm": pay_confirm,
+        "menu_about": about,
+        "menu_news": news,
+        "menu_faq": faq,
+        "menu_support": support,
+        "menu_stats": stats
+    }
+    if data in handlers:
+        await handlers[data](update, context)
 
-    if data == "menu_main":
-        await main_menu(update, context)
-    elif data == "menu_pay":
-        await pay(update, context)
-    elif data == "pay_confirm":
-        await pay_confirm(update, context)
-    elif data == "menu_support":
-        await support(update, context)
-    elif data == "menu_faq":
-        await faq(update, context)
-    elif data == "menu_about":
-        await about(update, context)
-    elif data == "menu_news":
-        await news(update, context)
+# --- Запуск бота ---
 
 if __name__ == "__main__":
     # Запуск Flask в отдельном потоке
     Thread(target=run_flask).start()
 
-    # Запуск бота
+    # Инициализация приложения
     application = Application.builder().token(BOT_TOKEN).build()
 
+    # Добавление обработчиков
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
 
-    print("✅ Valture бот запущен и работает!")
-    application.run_polling()
+    # Настройка вебхуков
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 8443)),
+        url_path="/webhook",
+        webhook_url=WEBHOOK_URL
+    )
+    print("✅ Valture бот запущен с вебхуками!")
