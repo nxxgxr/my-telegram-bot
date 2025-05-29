@@ -25,7 +25,7 @@ SCOPE = [
     "https://www.googleapis.com/auth/drive",
 ]
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-ADMIN_CHAY_ID = os.environ.get("ADMIN_CHAT_ID", "YOUR_ADMIN_CHAT_ID")
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "YOUR_ADMIN_CHAT_ID")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://your-app-name.onrender.com/webhook")
 
 # --- Логирование ---
@@ -73,6 +73,28 @@ async def send_progress_message(update: Update, context: ContextTypes.DEFAULT_TY
         await asyncio.sleep(0.3)
         await msg.edit_text(f"{message}\n{stage} ⚡", parse_mode="Markdown")
     return msg
+
+async def notify_admin(user: dict, action: str):
+    """Отправка уведомления админу о действиях пользователя."""
+    username = user.get('username', user.get('first_name', 'Неизвестный пользователь'))
+    if username.startswith('@'):
+        username = username[1:]
+    bot = Bot(BOT_TOKEN)
+    try:
+        await bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=(
+                f"🔔 *Действие пользователя* ⚡\n"
+                "┌────────────────────────┐\n"
+                f"│ Пользователь: @{username}\n"
+                f"│ Действие: {action}\n"
+                "└────────────────────────┘\n"
+                "🎮 *Valture* — отслеживаем активность!"
+            ),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при отправке уведомления админу: {e}")
 
 # --- Логика Google Sheets ---
 
@@ -130,6 +152,8 @@ async def append_license_to_sheet(license_key: str, username: str):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start."""
+    user = update.effective_user
+    await notify_admin(user, "Нажал /start")
     welcome_text = (
         "👋 *Добро пожаловать в Valture!* ⚡\n\n"
         "Мы предлагаем профессиональный инструмент для геймеров, "
@@ -144,6 +168,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отображение главного меню."""
     query = update.callback_query
     await query.answer()
+    await notify_admin(query.from_user, "Открыл главное меню")
     buttons = [
         ("ℹ️ О приложении", "menu_about"),
         ("📰 Новости", "menu_news"),
@@ -162,6 +187,7 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Информация о приложении."""
     query = update.callback_query
     await query.answer()
+    await notify_admin(query.from_user, "Выбрал 'О приложении'")
     text = (
         "✨ *Valture — Ваш путь к совершенству в играх* ⚡\n\n"
         "Valture — это передовой инструмент, созданный для геймеров, которые не готовы мириться с компромиссами. "
@@ -183,6 +209,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Меню оплаты."""
     query = update.callback_query
     await query.answer()
+    await notify_admin(query.from_user, "Выбрал 'Купить лицензию'")
     text = (
         "💳 *Приобретение лицензии Valture* ⚡\n\n"
         "Стоимость: *1000 рублей*\n"
@@ -196,6 +223,7 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Подтверждение оплаты и выдача ключа с ASCII-артом."""
     query = update.callback_query
     await query.answer()
+    await notify_admin(query.from_user, "Подтвердил покупку")
     async with limiter:
         try:
             license_key = generate_license()
@@ -223,6 +251,7 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Меню поддержки."""
     query = update.callback_query
     await query.answer()
+    await notify_admin(query.from_user, "Выбрал 'Поддержка'")
     text = (
         "📞 *Поддержка Valture* ⚡\n\n"
         "Возникли вопросы? Свяжитесь с нами:\n"
@@ -236,6 +265,7 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Часто задаваемые вопросы."""
     query = update.callback_query
     await query.answer()
+    await notify_admin(query.from_user, "Выбрал 'FAQ'")
     text = (
         "❓ *FAQ* ⚡\n\n"
         "**1. Как получить лицензию?**\n"
@@ -252,6 +282,7 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Раздел новостей."""
     query = update.callback_query
     await query.answer()
+    await notify_admin(query.from_user, "Выбрал 'Новости'")
     text = (
         "📰 *Новости Valture* ⚡\n\n"
         "Следите за обновлениями здесь!\n"
@@ -264,6 +295,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отображение статистики лицензий с анимированным графиком."""
     query = update.callback_query
     await query.answer()
+    await notify_admin(query.from_user, "Выбрал 'Статистика'")
     try:
         sheet = await get_sheet()
         licenses = sheet.get_all_values()[1:]  # Пропускаем заголовок
