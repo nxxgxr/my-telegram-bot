@@ -1,4 +1,3 @@
-улучши дизайн начального интерфейса при команде /start и текст в команде faq.
 import os
 import logging
 import secrets
