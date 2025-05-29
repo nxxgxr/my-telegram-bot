@@ -5,6 +5,7 @@ import redis.asyncio as redis
 from datetime import datetime, timezone, timedelta
 from threading import Thread
 import json
+import asyncio
 from typing import List
 
 from flask import Flask, request
@@ -24,7 +25,7 @@ SCOPE = [
     "https://www.googleapis.com/auth/drive",
 ]
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "YOUR_ADMIN_CHAT_ID")
+ADMIN_CHAY_ID = os.environ.get("ADMIN_CHAT_ID", "YOUR_ADMIN_CHAT_ID")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://your-app-name.onrender.com/webhook")
 
 # --- Логирование ---
@@ -57,6 +58,21 @@ def run_flask():
 
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 limiter = AsyncLimiter(max_rate=10, time_period=60)  # 10 запросов в минуту на пользователя
+
+# --- Интерактивные элементы ---
+
+def get_keyboard(buttons: List[tuple]) -> InlineKeyboardMarkup:
+    """Создание клавиатуры с анимацией кнопок."""
+    return InlineKeyboardMarkup([[InlineKeyboardButton(f"{'⚡ ' if i == 0 else '🔥 '}{text}", callback_data=callback)] for i, (text, callback) in enumerate(buttons)])
+
+async def send_progress_message(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str):
+    """Отправка анимированного сообщения с прогресс-баром."""
+    progress_stages = ["█" * i + "▒" * (10 - i) for i in range(1, 11)]
+    msg = await update.message.reply_text(f"{message}\n{progress_stages[0]} ⚡", parse_mode="Markdown")
+    for stage in progress_stages[1:]:
+        await asyncio.sleep(0.3)
+        await msg.edit_text(f"{message}\n{stage} ⚡", parse_mode="Markdown")
+    return msg
 
 # --- Логика Google Sheets ---
 
@@ -92,36 +108,30 @@ async def append_license_to_sheet(license_key: str, username: str):
         now_str = datetime.now(utc_plus_2).strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([license_key, "", username, now_str])
         logger.info(f"Лицензия {license_key} добавлена для {username}")
-        # Уведомление админа
+        # Уведомление админа с ASCII-артом
         bot = Bot(BOT_TOKEN)
         await bot.send_message(
             chat_id=ADMIN_CHAT_ID,
-            text=f"🔔 Новая лицензия!\nПользователь: {username}\nКлюч: `{license_key}`",
+            text=(
+                "🔔 *Новая лицензия!* ⚡\n"
+                "┌────────────────────────┐\n"
+                f"│ Пользователь: {username}\n"
+                f"│ Ключ: `{license_key}`\n"
+                "└────────────────────────┘\n"
+                "🎮 *Valture* — к победам!"
+            ),
             parse_mode="Markdown"
         )
     except Exception as e:
         logger.error(f"Ошибка при добавлении лицензии: {e}")
         raise
 
-# --- Интерактивные элементы ---
-
-def get_keyboard(buttons: List[tuple]) -> InlineKeyboardMarkup:
-    """Создание клавиатуры с анимацией кнопок."""
-    return InlineKeyboardMarkup([[InlineKeyboardButton(f"{'⏳ ' if i == 0 else ''}{text}", callback_data=callback)] for i, (text, callback) in enumerate(buttons)])
-
-async def send_progress_message(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str):
-    """Отправка сообщения с прогресс-баром."""
-    progress = "█" * 5 + "▒" * 5
-    await update.message.reply_text(f"{message}\n{progress}", parse_mode="Markdown")
-
 # --- Обработчики команд ---
 
-async def start(update: Update, context: ContextTypes
-
-.DEFAULT_TYPE):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start."""
     welcome_text = (
-        "👋 *Добро пожаловать в Valture!*\n\n"
+        "👋 *Добро пожаловать в Valture!* ⚡\n\n"
         "Мы предлагаем профессиональный инструмент для геймеров, "
         "которые стремятся к максимальной производительности и стабильности.\n\n"
         "Выберите действие в меню ниже:"
@@ -142,15 +152,18 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ("📞 Поддержка", "menu_support"),
         ("📊 Статистика", "menu_stats"),
     ]
-    await query.edit_message_text("🏠 *Главное меню*\n\nВыберите раздел:", parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+    await query.edit_message_text(
+        "🏠 *Главное меню* ⚡\n\nВыберите раздел:",
+        parse_mode="Markdown",
+        reply_markup=get_keyboard(buttons)
+    )
 
-async def about update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Информация о приложении."""
     query = update.callback_query
     await query.answer()
     text = (
-        "✨ *Valture — Ваш путь к совершенству в играх*\n\n"
-        "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
+        "✨ *Valture — Ваш путь к совершенству в играх* ⚡\n\n"
         "Valture — это передовой инструмент, созданный для геймеров, которые не готовы мириться с компромиссами. "
         "Наша миссия — вывести вашу игровую производительность на новый уровень, обеспечив максимальную плавность, "
         "стабильность и отзывчивость системы. С Valture вы получите конкурентное преимущество, о котором всегда мечтали.\n\n"
@@ -161,8 +174,7 @@ async def about update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔋 Оптимизация Windows\n"
         "🛳️ Плавность управления\n"
         "🖥️ Плавность картинки\n\n"
-        "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        "_Создано для геймеров, которые ценят качество и стремятся к победе._"
+        "_Создано для геймеров, которые ценят качество и стремятся к победе._ 🎮"
     )
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -172,7 +184,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "💳 *Приобретение лицензии Valture*\n\n"
+        "💳 *Приобретение лицензии Valture* ⚡\n\n"
         "Стоимость: *1000 рублей*\n"
         "После оплаты вы получите уникальный ключ прямо в чат.\n\n"
         "Готовы продолжить?"
@@ -181,7 +193,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Подтверждение оплаты и выдача ключа."""
+    """Подтверждение оплаты и выдача ключа с ASCII-артом."""
     query = update.callback_query
     await query.answer()
     async with limiter:
@@ -190,16 +202,20 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             username = query.from_user.username or query.from_user.full_name
             await append_license_to_sheet(license_key, username)
             text = (
-                "🎉 *Поздравляем с покупкой!*\n\n"
+                "🎉 *Поздравляем с покупкой!* ⚡\n\n"
                 "Ваш лицензионный ключ:\n"
                 f"`{license_key}`\n\n"
-                "Сохраните его в надежном месте!"
+                "┌────────────────────┐\n"
+                "│    Valture Key     │\n"
+                "│   🎮 Activated!   │\n"
+                "└────────────────────┘\n"
+                "🔐 *Сохрани ключ в надежном месте!*"
             )
             await query.edit_message_text(text, parse_mode="Markdown")
         except Exception as e:
             logger.error(f"Ошибка при генерации ключа: {e}")
             await query.edit_message_text(
-                "❌ *Ошибка*\n\nНе удалось сгенерировать ключ. Попробуйте позже или обратитесь в поддержку (@s3pt1ck).",
+                "❌ *Ошибка* 😔\n\nНе удалось сгенерировать ключ. Попробуйте позже или обратитесь в поддержку (@s3pt1ck).",
                 parse_mode="Markdown"
             )
 
@@ -208,20 +224,20 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "📞 *Поддержка Valture*\n\n"
+        "📞 *Поддержка Valture* ⚡\n\n"
         "Возникли вопросы? Свяжитесь с нами:\n"
         "👉 *@s3pt1ck*\n\n"
         "Мы ответим максимально быстро!"
     )
     buttons = [("🔙 Назад", "menu_main")]
-    await query.edit_message_text(text, parse_mode="Markdown大批, reply_markup=get_keyboard(buttons))
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Часто задаваемые вопросы."""
     query = update.callback_query
     await query.answer()
     text = (
-        "❓ *FAQ*\n\n"
+        "❓ *FAQ* ⚡\n\n"
         "**1. Как получить лицензию?**\n"
         "Перейдите в раздел 'Купить лицензию' и следуйте инструкциям.\n\n"
         "**2. Что делать, если ключ не работает?**\n"
@@ -237,7 +253,7 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "📰 *Новости Valture*\n\n"
+        "📰 *Новости Valture* ⚡\n\n"
         "Следите за обновлениями здесь!\n"
         "Пока новых сообщений нет."
     )
@@ -245,7 +261,7 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отображение статистики лицензий."""
+    """Отображение статистики лицензий с анимированным графиком."""
     query = update.callback_query
     await query.answer()
     try:
@@ -266,6 +282,10 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 }]
             },
             "options": {
+                "animation": {
+                    "duration": 2000,
+                    "easing": "easeInOutBounce"
+                },
                 "scales": {
                     "y": {
                         "beginAtZero": True
@@ -279,12 +299,14 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 }
             }
         }
-        await query.edit_message_text(
-            f"📊 *Статистика Valture*\n\nВсего лицензий: {total_licenses}\nАктивные пользователи: {active_users}",
-            parse_mode="Markdown",
-            reply_markup=get_keyboard([("🔙 Назад", "menu_main")])
+        text = (
+            "📊 *Статистика Valture* ⚡\n\n"
+            f"💿 *Всего лицензий:* {total_licenses}\n"
+            f"👥 *Активные пользователи:* {active_users}\n\n"
+            "🔍 *Посмотри график ниже!*"
         )
-        # Встраивание Chart.js графика
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard([("🔙 Назад", "menu_main")]))
+        # Встраивание анимированного Chart.js графика
         await query.message.reply_html(
             f"""
             <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -297,7 +319,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка при получении статистики: {e}")
         await query.edit_message_text(
-            "❌ *Ошибка*\n\nНе удалось загрузить статистику. Попробуйте позже или обратитесь в поддержку (@s3pt1ck).",
+            "❌ *Ошибка* 😔\n\nНе удалось загрузить статистику. Попробуйте позже или обратитесь в поддержку (@s3pt1ck).",
             parse_mode="Markdown"
         )
 
