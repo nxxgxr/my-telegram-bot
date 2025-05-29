@@ -15,7 +15,7 @@ from google.oauth2.service_account import Credentials
 
 # --- Настройки ---
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN") or "7713643772:AAG4LsuhHbg5efhMayuzeVwiyAxnCfq8txA"
+BOT_TOKEN = os.environ.get("BOT_TOKEN") or "7941872387:AAGZayILmna-qHHyQy5V50wDGylo3yFCZ0A"
 CREDS_FILE = "valture-license-bot-account.json"
 SPREADSHEET_NAME = "valture"
 SCOPE = [
