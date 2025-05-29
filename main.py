@@ -73,16 +73,6 @@ def append_license_to_sheet(license_key, username):
         logger.error(f"Ошибка при добавлении лицензии: {e}")
         raise
 
-def check_license_validity(license_key):
-    """Проверка валидности лицензионного ключа."""
-    try:
-        sheet = get_sheet()
-        keys = sheet.col_values(1)
-        return license_key in keys
-    except Exception as e:
-        logger.error(f"Ошибка проверки лицензии: {e}")
-        return False
-
 def get_keyboard(buttons):
     """Создание клавиатуры с кнопками."""
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
@@ -102,12 +92,11 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     buttons = [
-        ("💳 Купить лицензию", "menu_pay"),
-        ("🔑 Проверить ключ", "menu_check_license"),
-        ("📞 Поддержка", "menu_support"),
-        ("❓ FAQ", "menu_faq"),
         ("ℹ️ О приложении", "menu_about"),
         ("📰 Новости", "menu_news"),
+        ("💳 Купить лицензию", "menu_pay"),
+        ("❓ FAQ", "menu_faq"),
+        ("📞 Поддержка", "menu_support"),
     ]
     await query.edit_message_text("🏠 *Главное меню*\n\nВыберите раздел:", parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
@@ -135,9 +124,7 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "_Создано для геймеров, которые ценят качество._"
     )
     buttons = [
-        ("💳 Купить лицензию", "menu_pay"),
-        ("📞 Поддержка", "menu_support"),
-        ("🏠 Главное меню", "menu_main"),
+        ("🔙 Назад", "menu_main"),
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
@@ -151,7 +138,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "После оплаты вы получите уникальный ключ прямо в чат.\n\n"
         "Готовы продолжить?"
     )
-    buttons = [("✅ Оплатить", "pay_confirm"), ("🏠 Главное меню", "menu_main")]
+    buttons = [("✅ Оплатить", "pay_confirm"), ("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -169,21 +156,12 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Сохраните его в надежном месте!"
         )
         await query.edit_message_text(text, parse_mode="Markdown")
-    except Exception:
+    except Exception as e:
+        logger.error(f"Ошибка при генерации ключа: {e}")
         await query.edit_message_text(
             "❌ *Ошибка*\n\nНе удалось сгенерировать ключ. Попробуйте позже или обратитесь в поддержку.",
             parse_mode="Markdown"
         )
-
-async def check_license(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка лицензии (заглушка)."""
-    query = update.callback_query
-    await query.answer()
-    text = (
-        "🔑 *Проверка лицензии*\n\n"
-        "Пожалуйста, отправьте ваш ключ в чат, чтобы проверить его валидность."
-    )
-    await query.edit_message_text(text, parse_mode="Markdown")
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Меню поддержки."""
@@ -192,10 +170,10 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📞 *Поддержка Valture*\n\n"
         "Возникли вопросы? Свяжитесь с нами:\n"
-        "👉 *@your_support_username*\n\n"
+        "👉 *@s3pt1ck*\n\n"
         "Мы ответим максимально быстро!"
     )
-    buttons = [("🏠 Главное меню", "menu_main")]
+    buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -211,7 +189,7 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "**3. Можно ли использовать ключ на нескольких устройствах?**\n"
         "Нет, ключ привязан к одному устройству."
     )
-    buttons = [("🏠 Главное меню", "menu_main")]
+    buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -223,7 +201,7 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Следите за обновлениями здесь!\n"
         "Пока новых сообщений нет."
     )
-    buttons = [("🏠 Главное меню", "menu_main")]
+    buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -237,8 +215,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await pay(update, context)
     elif data == "pay_confirm":
         await pay_confirm(update, context)
-    elif data == "menu_check_license":
-        await check_license(update, context)
     elif data == "menu_support":
         await support(update, context)
     elif data == "menu_faq":
