@@ -26,7 +26,7 @@ CREDS_FILE = os.environ.get("CREDS_FILE")
 SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME")
 GOOGLE_CREDS_JSON_BASE64 = os.environ.get("GOOGLE_CREDS_JSON_BASE64")
 EXE_FILE_PATH = os.environ.get("EXE_FILE_PATH", "valture_app.exe")  # Путь к .exe файлу
-APP_DOWNLOAD_LINK = os.environ.get("APP_DOWNLOAD_LINK", "https://example.com/valture_app.exe")  # Ссылка на приложение
+APP_DOWNLOAD_LINK = os.environ.get("APP_DOWNLOAD_LINK", "https://www.dropbox.com/scl/fi/ze5ebd909z2qeaaucn56q/VALTURE.exe?rlkey=ihdzk8voej4oikrdhq0wfzvbb&st=jj5tgroa&dl=1")  # Ссылка на приложение
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
@@ -34,8 +34,8 @@ SCOPE = [
 
 # Цены
 PRICES = {
-    "crypto_ton": 4.0,  # Цена в TON
-    "yookassa_rub": 1000.0,  # Цена в RUB через YooKassa
+    "crypto_ton": 0.1,  # Цена в TON
+    "yookassa_rub": 1.0,  # Цена в RUB через YooKassa
     "usd_equivalent": 12.7  # Эквивалент в USD для отображения
 }
 
