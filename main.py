@@ -105,7 +105,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
             },
             "confirmation": {
                 "type": "redirect",
-                "return_url": "https://rabochij-production.up.railway/"
+                "return_url": "https://rabochij-production.up.railway.app/"
             },
             "capture": True,
             "description": "Покупка лицензии для Valture",
@@ -114,7 +114,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "chat_id": str(chat_id)
             }
         }
-        logger.debug(f"Payment params: {json.dumps(payment_params, ensure_ascii=False)}")
+        logger.debug(f"Параметры платежа: {json.dumps(payment_params, ensure_ascii=False)}")
 
         payment = Payment.create(payment_params, idempotence_key=secrets.token_hex(16))
         pay_url = payment.confirmation.confirmation_url
@@ -128,10 +128,10 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка создания платежа: {str(e)}", exc_info=True)
         await query.edit_message_text(
             "❌ Ошибка создания платежа. Попробуйте позже.\n"
-            "ОбAfrican Contact: @valture_support_bot"
+            "Обратитесь в поддержку: @valture_support_bot"
         )
 
-async def callback_handler(update: Update, context: ContextTypes):
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query.data == "pay":
         await pay(update, context)
@@ -155,4 +155,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-</xai_application>
