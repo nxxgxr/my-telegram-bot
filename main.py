@@ -495,7 +495,7 @@ async def pay_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка оплаты через YooKassa после подтверждения."""
-    query = update.callback_query xb
+    query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     username = query.from_user.username or query.from_user.full_name
