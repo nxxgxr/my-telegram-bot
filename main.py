@@ -1,7 +1,7 @@
 # Конфигурация цен
 PRICES = {
-    "valture_license_crypto": 4.0,    # Цена в TON для CryptoBot
-    "valture_license_rub": 1000.0     # Цена в RUB для YooKassa
+    "valture_license_crypto": 0.01,    # Цена в TON для CryptoBot
+    "valture_license_rub": 1.0     # Цена в RUB для YooKassa
 }
 
 import os
