@@ -255,45 +255,16 @@ def append_license_to_sheet(license_key, username):
         logger.error(f"Ошибка при добавлении лицензии: {e}")
         raise
 
-def get_crypto_exchange_rates():
-    """Получение текущих курсов криптовалют через CryptoBot API."""
-    try:
-        headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
-        response = requests.get(f"{CRYPTO_BOT_API}/getExchangeRates", headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if data.get("ok"):
-            logger.info("Курсы криптовалют успешно получены")
-            return {item["source"]: item["rate"] for item in data["result"]}
-        else:
-            logger.error(f"Ошибка получения курсов: {data.get('error', 'Неизвестная ошибка')}")
-            return {}
-    except Exception as e:
-        logger.error(f"Ошибка при получении курсов: {e}")
-        return {}
-
-def create_crypto_invoice(amount_ton=4.0, asset="TON", description="Valture License"):
-    """Создание инвойса через CryptoBot для указанной криптовалюты, эквивалентной amount_ton."""
-    logger.debug(f"Создание инвойса: amount_ton={amount_ton}, asset={asset}, description={description}")
+def create_crypto_invoice(amount=4.0, asset="TON", description="Valture License"):
+    """Создание инвойса через CryptoBot для TON."""
+    logger.debug(f"Создание инвойса: amount={amount}, asset={asset}, description={description}")
     if not CRYPTOBOT_API_TOKEN:
         logger.error("CRYPTOBOT_API_TOKEN не задан в переменных окружения")
         return None, "CRYPTOBOT_API_TOKEN не задан"
 
     try:
-        # Получаем курсы, если выбрана не TON
-        if asset != "TON":
-            rates = get_crypto_exchange_rates()
-            if not rates or "TON" not in rates or asset not in rates:
-                logger.error(f"Не удалось получить курс для {asset}/TON")
-                return None, "Ошибка получения курса криптовалюты"
-            # Рассчитываем сумму в выбранной криптовалюте
-            ton_price_in_asset = rates["TON"] / rates[asset]
-            amount = amount_ton * ton_price_in_asset
-        else:
-            amount = amount_ton
-
         payload = {
-            "amount": f"{amount:.8f}",  # Учитываем точность для криптовалют
+            "amount": f"{amount:.8f}",  # Учитываем точность для TON
             "asset": asset,
             "description": description,
             "order_id": secrets.token_hex(16),
@@ -311,8 +282,9 @@ def create_crypto_invoice(amount_ton=4.0, asset="TON", description="Valture Lice
         data = response.json()
         
         if data.get("ok"):
-            logger.info(f"Инвойс успешно создан: invoice_id={data['result']['invoice_id']}")
-            return data["result"], None
+            invoice = data["result"]
+            logger.info(f"Инвойс успешно создан: invoice_id={invoice['invoice_id']}, pay_url={invoice.get('pay_url')}")
+            return invoice, None
         else:
             error_msg = data.get("error", "Неизвестная ошибка от CryptoBot")
             logger.error(f"Ошибка API CryptoBot: {error_msg}")
@@ -449,36 +421,32 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Меню оплаты с выбором криптовалюты и YooKassa."""
+    """Меню оплаты с двумя вариантами: CryptoBot и YooKassa."""
     query = update.callback_query
     await query.answer()
     text = (
         "💳 *Покупка лицензии Valture*\n\n"
         f"Цена: *{PRICES['crypto_ton']} TON* или *{PRICES['yookassa_rub']} RUB (~${PRICES['usd_equivalent']})*\n"
         "Выберите способ оплаты:\n"
-        "- *CryptoBot*: Оплата через криптовалюту (выберите валюту).\n"
+        "- *CryptoBot*: Оплата через криптовалюту.\n"
         "- *YooKassa*: Оплата картой.\n\n"
         "Ключ и приложение будут отправлены в чат после оплаты."
     )
     buttons = [
-        ("💸 TON", "pay_crypto_TON"),
-        ("💸 BTC", "pay_crypto_BTC"),
-        ("💸 ETH", "pay_crypto_ETH"),
-        ("💸 USDT", "pay_crypto_USDT"),
-        ("💸 BNB", "pay_crypto_BNB"),
+        ("💸 CryptoBot", "pay_crypto"),
         ("💳 YooKassa", "pay_yookassa"),
         ("🔙 Назад в главное меню", "menu_main")
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Подтверждение оплаты через CryptoBot с указанием выбранной криптовалюты."""
+    """Подтверждение оплаты через CryptoBot."""
     query = update.callback_query
     await query.answer()
-    asset = context.user_data.get("selected_asset", "TON")
     text = (
-        f"💸 *Подтверждение оплаты CryptoBot ({asset})*\n\n"
-        f"Вы собираетесь оплатить эквивалент *{PRICES['crypto_ton']} TON* в {asset} за лицензию Valture.\n"
+        "💸 *Подтверждение оплаты CryptoBot*\n\n"
+        f"Вы собираетесь оплатить *{PRICES['crypto_ton']} TON* за лицензию Valture.\n"
+        "На странице оплаты вы сможете выбрать любую криптовалюту (BTC, ETH, USDT, BNB и др.).\n"
         "Продолжить оплату?"
     )
     buttons = [
@@ -493,22 +461,21 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     user_id = query.from_user.id
     username = query.from_user.username or query.from_user.full_name
-    asset = context.user_data.get("selected_asset", "TON")
 
     try:
-        logger.debug(f"Создание CryptoBot инвойса для пользователя: {username} (ID: {user_id}), валюта: {asset}")
-        invoice, error = create_crypto_invoice(amount_ton=PRICES['crypto_ton'], asset=asset, description="Valture License")
-        if not invoice:
+        logger.debug(f"Создание CryptoBot инвойса для пользователя: {username} (ID: {user_id})")
+        invoice, error = create_crypto_invoice(amount=PRICES['crypto_ton'], asset="TON", description="Valture License")
+        if not invoice or "pay_url" not in invoice:
             error_msg = (
                 "❌ *Ой, что-то пошло не так!*\n\n"
                 f"Не удалось создать инвойс: {error or 'Неизвестная ошибка'}.\n"
                 "Попробуйте снова или свяжитесь с @s3pt1ck."
             )
             buttons = [
-                ("🔄 Попробовать снова", f"pay_crypto_{asset}"),
+                ("🔄 Попробовать снова", "pay_crypto"),
                 ("🔙 Назад к способам оплаты", "menu_pay")
             ]
-            logger.error(f"Ошибка в pay_crypto: {error}")
+            logger.error(f"Ошибка в pay_crypto: {error}, invoice: {invoice}")
             await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
             return
 
@@ -521,8 +488,8 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.info(f"CryptoBot инвойс создан: invoice_id={invoice_id}, pay_url={pay_url}")
 
         text = (
-            f"💸 *Оплатите через CryptoBot ({asset})*\n\n"
-            f"Нажмите ниже для оплаты эквивалента *{PRICES['crypto_ton']} TON* в {asset}:\n"
+            f"💸 *Оплатите через CryptoBot*\n\n"
+            f"Нажмите ниже для оплаты *{PRICES['crypto_ton']} TON* (или эквивалент в другой криптовалюте):\n"
             f"[Оплатить через CryptoBot]({pay_url})\n\n"
             "После оплаты подтвердите ниже, чтобы получить ключ и приложение."
         )
@@ -538,7 +505,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "Не удалось обработать запрос. Попробуйте снова или свяжитесь с @s3pt1ck."
         )
         buttons = [
-            ("🔄 Попробовать снова", f"pay_crypto_{asset}"),
+            ("🔄 Попробовать снова", "pay_crypto"),
             ("🔙 Назад к способам оплаты", "menu_pay")
         ]
         await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -632,7 +599,6 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     invoice_id = context.user_data.get("invoice_id")
     username = context.user_data.get("username")
-    asset = context.user_data.get("selected_asset", "TON")
 
     if not invoice_id or not username:
         logger.error(f"Данные об оплате отсутствуют: invoice_id={invoice_id}, username={username}")
@@ -641,7 +607,7 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Не удалось найти данные об оплате. Попробуйте снова или свяжитесь с @s3pt1ck."
         )
         buttons = [
-            ("🔄 Попробовать снова", f"pay_crypto_{asset}"),
+            ("🔄 Попробовать снова", "pay_crypto"),
             ("🔙 Назад к способам оплаты", "menu_pay")
         ]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -767,9 +733,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await main_menu(update, context)
     elif data == "menu_pay":
         await pay(update, context)
-    elif data.startswith("pay_crypto_"):
-        asset = data.split("_")[-1]
-        context.user_data["selected_asset"] = asset
+    elif data == "pay_crypto":
         await pay_crypto(update, context)
     elif data == "pay_crypto_confirm":
         await pay_crypto_confirm(update, context)
