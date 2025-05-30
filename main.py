@@ -78,7 +78,7 @@ def yookassa_webhook():
                 append_license_to_sheet(license_key, username)
                 bot = Bot(token=BOT_TOKEN)
                 bot.send_message(
-                    chat_id=f"@{username}",
+                    chat_id=payment_obj.get('recipient', {}).get('gateway_id', '') or f"@{username}",
                     text=(
                         f"🎉 Поздравляем с покупкой!\n\n"
                         f"Ваш лицензионный ключ:\n`{license_key}`\n\n"
@@ -182,9 +182,13 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "capture": True,
             "description": "Покупка лицензии Valture",
             "metadata": {"username": username}
-        }, idempotence_key=secrets.token_hex(16))  # передаем idempotence_key для уникальности
+        }, idempotence_key=secrets.token_hex(16))
 
-        pay_url = payment.confirmation.confirmation_url
+        # Безопасно получить ссылку на оплату
+        pay_url = payment.confirmation.get('confirmation_url') if isinstance(payment.confirmation, dict) else getattr(payment.confirmation, 'confirmation_url', None)
+        if not pay_url:
+            raise Exception("Не удалось получить URL для оплаты")
+
         logger.info(f"Платеж создан, ссылка: {pay_url}")
 
         await query.edit_message_text(
