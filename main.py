@@ -192,22 +192,44 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    # Тут логика создания платежа ЮKassa и получение ссылки
-    # Пока отправляем тестовую ссылку (замени на реальную)
-    pay_url = "https://yookassa.ru/pay?shopId=" + YOOKASSA_SHOP_ID
-    await query.edit_message_text(f"Перейдите по ссылке для оплаты:\n{pay_url}", disable_web_page_preview=True)
+
+    user = query.from_user
+
+    try:
+        payment = Payment.create({
+            "amount": {
+                "value": "1000.00",
+                "currency": "RUB"
+            },
+            "confirmation": {
+                "type": "redirect",
+                "return_url": "https://t.me/valture_support_bot"  # Замени на нужный URL возврата после оплаты
+            },
+            "capture": True,
+            "description": f"Оплата лицензии Valture для пользователя {user.username or user.id}",
+            "metadata": {
+                "username": user.username or str(user.id)
+            }
+        }, idempotence_key=secrets.token_hex(16))
+
+        pay_url = payment.confirmation.confirmation_url
+        await query.edit_message_text(f"Перейдите по ссылке для оплаты:\n{pay_url}", disable_web_page_preview=True)
+
+    except Exception as e:
+        logger.error(f"Ошибка при создании платежа: {e}")
+        await query.edit_message_text(f"Ошибка при создании платежа. Попробуйте позже.")
 
 async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
         "❓ *Часто задаваемые вопросы*\n\n"
-        "Q: Что делать, если не пришёл лицензионный ключ?\n"
-        "A: Проверьте, что вы оплатили через официальный сервис. Если проблема сохраняется, свяжитесь с поддержкой.\n\n"
-        "Q: Можно ли использовать лицензию на нескольких устройствах?\n"
-        "A: Нет, лицензия привязана к одному устройству.\n\n"
-        "Q: Как получить поддержку?\n"
-        "A: Напишите в чат поддержки через главное меню."
+        "Q: Что делать, если не приходит лицензионный ключ?\n"
+        "A: Проверьте, что вы оплатили через официальный бот, и дождитесь подтверждения.\n\n"
+        "Q: Можно ли использовать ключ на нескольких устройствах?\n"
+        "A: Нет, ключ привязан к одному пользователю.\n\n"
+        "Q: Как связаться с поддержкой?\n"
+        "A: Используйте кнопку 'Поддержка' в главном меню."
     )
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -217,13 +239,13 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     text = (
         "📞 *Поддержка*\n\n"
-        "Если у вас возникли вопросы, напишите нам в Telegram:\n"
+        "Если у вас возникли вопросы или проблемы, напишите нам:\n"
         "@valture_support_bot"
     )
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
@@ -240,21 +262,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "menu_support":
         await support(update, context)
     else:
-        await query.answer("Неизвестная команда.", show_alert=True)
+        await query.answer("Неизвестная команда", show_alert=True)
 
-# --- Запуск бота ---
+# --- Запуск бота и Flask параллельно ---
 
-def main():
+async def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(callback_handler))
+    application.add_handler(CallbackQueryHandler(button_handler))
 
-    # Запуск Flask в отдельном потоке для вебхука и keep-alive
-    flask_thread = Thread(target=run_flask)
-    flask_thread.start()
+    # Запускаем Flask в отдельном потоке
+    thread = Thread(target=run_flask, daemon=True)
+    thread.start()
 
-    application.run_polling()
+    logger.info("Бот запущен!")
+    await application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
