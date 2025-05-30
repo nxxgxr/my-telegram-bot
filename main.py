@@ -18,12 +18,12 @@ from yookassa import Configuration, Payment
 
 # --- Настройки ---
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN") or "7941872387:AAGZayILmna-qHHyQy5V50wDGylo3yFCZ0A"
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN")
 YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID")
 YOOKASSA_SECRET_KEY = os.environ.get("YOOKASSA_SECRET_KEY")
-CREDS_FILE = os.environ.get("CREDS_FILE") or "valture-license-bot-account.json"
-SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME") or "valture"
+CREDS_FILE = os.environ.get("CREDS_FILE")
+SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME")
 GOOGLE_CREDS_JSON_BASE64 = os.environ.get("GOOGLE_CREDS_JSON_BASE64")
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
