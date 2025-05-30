@@ -20,7 +20,7 @@ from yookassa import Configuration, Payment
 
 PRICES = {
     "crypto": {"amount": 4.0, "currency": "TON", "approx_usd": 12.7},
-    "yookassa": {"amount": 1.0, "currency": "RUB", "approx_usd": 12.7}
+    "yookassa": {"amount": 1000.0, "currency": "RUB", "approx_usd": 12.7}
 }
 APP_DOWNLOAD_LINK = "https://www.dropbox.com/scl/fi/ze5ebd909z2qeaaucn56q/VALTURE.exe?rlkey=ihdzk8voej4oikrdhq0wfzvbb&st=jj5tgroa&dl=1"
 
@@ -30,7 +30,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN")
 YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID")
 YOOKASSA_SECRET_KEY = os.environ.get("YOOKASSA_SECRET_KEY")
-CREDS_FILE = os.environ.get("CREDS_FILE")
+CREDS_FILE = os.environ.get("CREDS_FILE", "creds.json")
 SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME")
 GOOGLE_CREDS_JSON_BASE64 = os.environ.get("GOOGLE_CREDS_JSON_BASE64")
 SCOPE = [
@@ -75,6 +75,15 @@ def test_yookassa():
     except Exception as e:
         return f"YooKassa test error: {str(e)}"
 
+@app.route('/test-webhook', methods=['POST', 'GET'])
+def test_webhook():
+    """Debug endpoint to test webhook connectivity."""
+    if request.method == 'POST':
+        data = request.get_json()
+        logger.debug(f"Test webhook received: {json.dumps(data, indent=2, ensure_ascii=False)}")
+        return jsonify({"status": "ok", "message": "Webhook received"})
+    return "Webhook test endpoint"
+
 @app.route('/yookassa-webhook', methods=['POST'])
 def yookassa_webhook():
     """Handle YooKassa payment notifications."""
@@ -87,47 +96,42 @@ def yookassa_webhook():
             return jsonify({"status": "error", "message": "Invalid payload"}), 400
 
         event = event_json['event']
-        payment_object = event_json['object']
-        
-        if event == 'payment.succeeded':
-            payment_id = payment_object.get('id')
-            metadata = payment_object.get('metadata', {})
-            user_id = metadata.get('user_id')
-            username = metadata.get('username')
-            
-            if not payment_id or not user_id or not username:
-                logger.error(f"Missing critical data: payment_id={payment_id}, user_id={user_id}, username={username}")
-                return jsonify({"status": "error", "message": "Missing data"}), 400
+        if event != 'payment.succeeded':
+            logger.debug(f"Ignored webhook event: {event}")
+            return jsonify({"status": "ignored"}), 200
 
-            from application import application
-            job_queue = application.job_queue
-            job_queue.run_once(
-                process_yookassa_payment,
-                0,
-                context={
-                    'payment_id': payment_id,
-                    'user_id': int(user_id),
-                    'username': username,
-                    'chat_id': int(user_id)
-                },
-                name=f"yookassa_payment_{payment_id}"
-            )
-            logger.info(f"YooKassa payment succeeded: payment_id={payment_id}, user={username}")
-            return jsonify({"status": "ok"}), 200
-        
-        elif event == 'payment.canceled':
-            logger.warning(f"YooKassa payment canceled: payment_id={payment_object.get('id')}")
-            return jsonify({"status": "ok"}), 200
-        
-        logger.debug(f"Ignored webhook event: {event}")
-        return jsonify({"status": "ignored"}), 200
+        payment_object = event_json['object']
+        payment_id = payment_object.get('id')
+        metadata = payment_object.get('metadata', {})
+        user_id = metadata.get('user_id')
+        username = metadata.get('username')
+
+        if not payment_id or not user_id or not username:
+            logger.error(f"Missing critical data: payment_id={payment_id}, user_id={user_id}, username={username}")
+            return jsonify({"status": "error", "message": "Missing data"}), 400
+
+        from application import application
+        job_queue = application.job_queue
+        job_queue.run_once(
+            process_yookassa_payment,
+            0,
+            context={
+                'payment_id': payment_id,
+                'user_id': int(user_id),
+                'username': username,
+                'chat_id': int(user_id)
+            },
+            name=f"yookassa_payment_{payment_id}"
+        )
+        logger.info(f"YooKassa payment succeeded: payment_id={payment_id}, user={username}")
+        return jsonify({"status": "ok"}), 200
     
     except Exception as e:
         logger.error(f"YooKassa webhook error: {str(e)}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
-    """Process confirmed YooKassa payment and issue license key."""
+    """Process confirmed YooKassa payment and issue HWID key."""
     job_context = context.job.context
     payment_id = job_context['payment_id']
     user_id = job_context['user_id']
@@ -135,14 +139,13 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
     chat_id = job_context['chat_id']
 
     try:
-        # Verify payment status
         payment = Payment.find_one(payment_id)
         logger.debug(f"YooKassa payment {payment_id} status: {payment.status}")
         if payment.status != "succeeded":
             logger.warning(f"YooKassa payment not succeeded: payment_id={payment_id}, status={payment.status}")
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="❌ *Ошибка оплаты!*\n\nПлатеж не подтвержден. Свяжитесь с @s3pt1ck.",
+                text="❌ *Ошибка оплаты!*\n\nПлатеж не завершен. Свяжитесь с @s3pt1ck.",
                 parse_mode="Markdown"
             )
             return
@@ -151,7 +154,7 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
         append_license_to_sheet(license_key, username, payment_id, "yookassa")
         text = (
             "🎉 *Поздравляем с покупкой!*\n\n"
-            "Ваш лицензионный ключ (HWID):\n"
+            "Ваш HWID-ключ:\n"
             f"`{license_key}`\n\n"
             "Скачайте приложение:\n"
             f"[VALTURE.exe]({APP_DOWNLOAD_LINK})\n\n"
@@ -167,8 +170,8 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error processing YooKassa payment {payment_id}: {str(e)}", exc_info=True)
         error_text = (
-            "❌ *Произошла ошибка!*\n\n"
-            "Не удалось выдать ключ. Обратитесь в поддержку: @s3pt1ck."
+            "❌ *Ошибка!*\n\n"
+            "Не удалось выдать ключ. Свяжитесь с @s3pt1ck."
         )
         try:
             await context.bot.send_message(
@@ -186,7 +189,7 @@ def run_flask():
 # --- Google Credentials ---
 
 def setup_google_creds():
-    """Decode base64 Google credentials and create a temporary file."""
+    """Decode base64 Google credentials or use existing file."""
     logger.debug("Checking Google credentials...")
     if GOOGLE_CREDS_JSON_BASE64:
         try:
@@ -222,34 +225,34 @@ def get_sheet():
             raise
     return sheet_cache
 
-def generate_license(length=32):
-    """Generate a secure license key."""
+def generate_license(length=16):
+    """Generate a secure HWID license key."""
     try:
         key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
-        logger.info(f"Generated license key: {key[:8]}...")
+        logger.info(f"Generated HWID key: {key[:8]}...")
         return key
     except Exception as e:
-        logger.error(f"Error generating license key: {str(e)}")
+        logger.error(f"Error generating HWID key: {str(e)}")
         raise
 
 def append_license_to_sheet(license_key, username, payment_id, payment_type):
-    """Append license to Google Sheets."""
+    """Append HWID license to Google Sheets."""
     try:
         sheet = get_sheet()
-        utc_plus_2 = timezone(timedelta(hours=2))
-        now_utc_plus_2 = datetime.now(utc_plus_2)
-        now_str = now_utc_plus_2.strftime("%Y-%m-%d %H:%M:%S")
+        utc_plus_3 = timezone(timedelta(hours=3))
+        now_utc_plus_3 = datetime.now(utc_plus_3)
+        now_str = now_utc_plus_3.strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([license_key, username, payment_id, payment_type, now_str])
-        logger.info(f"License {license_key[:8]}... added for {username}, payment_id={payment_id}, type={payment_type}")
+        logger.info(f"HWID {license_key[:8]}... added for {username}, payment_id={payment_id}, type={payment_type}")
     except Exception as e:
-        logger.error(f"Error appending license: {str(e)}")
+        logger.error(f"Error appending HWID: {str(e)}")
         raise
 
-# --- Платежная логика ---
+# --- Payment Logic ---
 
 def create_crypto_invoice(amount, asset="TON", description="Valture License"):
     """Create a CryptoBot invoice."""
-    logger.debug(f"Creating invoice: amount={amount}, asset={asset}")
+    logger.debug(f"Creating crypto invoice: amount={amount}, asset={asset}")
     if not CRYPTOBOT_API_TOKEN:
         logger.error("CRYPTOBOT_API_TOKEN not set")
         return None, "CRYPTOBOT_API_TOKEN not set"
@@ -270,29 +273,20 @@ def create_crypto_invoice(amount, asset="TON", description="Valture License"):
         data = response.json()
         
         if data.get("ok"):
-            logger.info(f"Invoice created: invoice_id={data['result']['invoice_id']}")
+            logger.info(f"Crypto invoice created: invoice_id={data['result']['invoice_id']}")
             return data["result"], None
         else:
             error_msg = data.get("error", "Unknown CryptoBot error")
             logger.error(f"CryptoBot API error: {error_msg}")
             return None, f"API error: {error_msg}"
             
-    except requests.exceptions.HTTPError as http_err:
-        logger.error(f"HTTP error creating invoice: {str(http_err)}, Response: {response.text}")
-        return None, f"HTTP error: {str(http_err)}"
-    except requests.exceptions.Timeout:
-        logger.error("Timeout accessing CryptoBot API")
-        return None, "Request timeout"
-    except requests.exceptions.RequestException as req_err:
-        logger.error(f"Network error creating invoice: {str(req_err)}")
-        return None, f"Network error: {str(req_err)}"
     except Exception as e:
-        logger.error(f"General error creating invoice: {str(e)}")
+        logger.error(f"Error creating crypto invoice: {str(e)}")
         return None, f"Error: {str(e)}"
 
 def check_invoice_status(invoice_id):
     """Check CryptoBot invoice status."""
-    logger.debug(f"Checking invoice status: invoice_id={invoice_id}")
+    logger.debug(f"Checking crypto invoice status: invoice_id={invoice_id}")
     try:
         headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
         response = requests.get(f"{CRYPTO_BOT_API}/getInvoices?invoice_ids={invoice_id}", headers=headers, timeout=10)
@@ -300,13 +294,13 @@ def check_invoice_status(invoice_id):
         data = response.json()
         if data.get("ok"):
             status = data["result"]["items"][0]["status"]
-            logger.info(f"Invoice {invoice_id} status: {status}")
+            logger.info(f"Crypto invoice {invoice_id} status: {status}")
             return status
         else:
-            logger.error(f"Error checking invoice status: {data.get('error', 'Unknown error')}")
+            logger.error(f"Error checking crypto invoice status: {data.get('error', 'Unknown error')}")
             return None
     except Exception as e:
-        logger.error(f"Error checking invoice: {str(e)}")
+        logger.error(f"Error checking crypto invoice: {str(e)}")
         return None
 
 def create_yookassa_payment(amount, description, user_id, username):
@@ -354,7 +348,7 @@ async def check_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
             append_license_to_sheet(license_key, username, payment_id, "yookassa")
             text = (
                 "🎉 *Поздравляем с покупкой!*\n\n"
-                "Ваш лицензионный ключ (HWID):\n"
+                "Ваш HWID-ключ:\n"
                 f"`{license_key}`\n\n"
                 "Скачайте приложение:\n"
                 f"[VALTURE.exe]({APP_DOWNLOAD_LINK})\n\n"
@@ -389,7 +383,7 @@ async def check_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
             )
             context.job.schedule_removal()
 
-# --- Логика Telegram-бота ---
+# --- Telegram Bot Logic ---
 
 def get_keyboard(buttons):
     """Create an inline keyboard."""
@@ -519,7 +513,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "💸 *Оплатите через CryptoBot*\n\n"
             f"Нажмите ниже для оплаты *{PRICES['crypto']['amount']} {PRICES['crypto']['currency']}*:\n"
             f"[Оплатить через CryptoBot]({pay_url})\n\n"
-            "Ключ и ссылка будут отправлены автоматически после оплаты."
+            "HWID-ключ и ссылка будут отправлены автоматически после оплаты."
         )
         buttons = [("🔙 Назад к способам оплаты", "menu_pay")]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
@@ -563,7 +557,7 @@ async def check_crypto_payment(context: ContextTypes.DEFAULT_TYPE):
             append_license_to_sheet(license_key, username, invoice_id, "crypto")
             text = (
                 "🎉 *Поздравляем с покупкой!*\n\n"
-                "Ваш лицензионный ключ (HWID):\n"
+                "Ваш HWID-ключ:\n"
                 f"`{license_key}`\n\n"
                 "Скачайте приложение:\n"
                 f"[VALTURE.exe]({APP_DOWNLOAD_LINK})\n\n"
@@ -673,12 +667,11 @@ async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
             "💳 *Оплатите через YooKassa*\n\n"
             f"Нажмите ниже для оплаты *{PRICES['yookassa']['amount']} {PRICES['yookassa']['currency']}*:\n"
             f"[Оплатить через YooKassa]({confirmation_url})\n\n"
-            "Ключ и ссылка будут отправлены автоматически после оплаты."
+            "HWID-ключ и ссылка будут отправлены автоматически после оплаты."
         )
         buttons = [("🔙 Назад к способам оплаты", "menu_pay")]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
 
-        # Start periodic payment check
         context.job_queue.run_repeating(
             check_yookassa_payment,
             interval=10,
@@ -722,9 +715,9 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     text = (
         "❓ *Часто задаваемые вопросы*\n\n"
-        "🔹 *Как получить лицензию?*\n"
-        "Перейдите в 'Купить лицензию' и выберите способ оплаты.\n\n"
-        "🔹 *Что делать, если ключ не пришел?*\n"
+        "🔹 *Как получить HWID-ключ?*\n"
+        "Оплатите через CryptoBot или YooKassa, ключ придет автоматически.\n\n"
+        "🔹 *Ключ не пришел, что делать?*\n"
         "Напишите в поддержку: @s3pt1ck.\n\n"
         "🔹 *Можно ли использовать ключ на нескольких устройствах?*\n"
         "Нет, ключ привязан к одному устройству."
