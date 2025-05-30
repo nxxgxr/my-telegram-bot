@@ -33,7 +33,7 @@ CRYPTO_BOT_API = "https://pay.crypt.bot/api"
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.DEBUG  # Changed to DEBUG for more detailed logs
+    level=logging.DEBUG  # Keep DEBUG level for detailed logs
 )
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,16 @@ app = Flask(__name__)
 @app.route('/')
 def home():
     return "✅ Valture бот работает!"
+
+@app.route('/test-crypto-api')
+def test_crypto_api():
+    """Debug endpoint to test CryptoBot API connectivity."""
+    try:
+        headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
+        response = requests.get(f"{CRYPTO_BOT_API}/getMe", headers=headers, timeout=10)
+        return f"API Response: {response.json()}"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
@@ -112,9 +122,9 @@ def append_license_to_sheet(license_key, username):
         logger.error(f"Ошибка при добавлении лицензии: {e}")
         raise
 
-def create_crypto_invoice(amount, currency="USDT", description="Valture License"):
+def create_crypto_invoice(amount, asset="USDT", description="Valture License"):
     """Создание инвойса через CryptoBot."""
-    logger.debug(f"Создание инвойса: amount={amount}, currency={currency}, description={description}")
+    logger.debug(f"Создание инвойса: amount={amount}, asset={asset}, description={description}")
     if not CRYPTOBOT_API_TOKEN:
         logger.error("CRYPTOBOT_API_TOKEN не задан в переменных окружения")
         return None, "CRYPTOBOT_API_TOKEN не задан"
@@ -122,7 +132,7 @@ def create_crypto_invoice(amount, currency="USDT", description="Valture License"
     try:
         payload = {
             "amount": str(amount),  # Ensure amount is a string
-            "currency": currency,
+            "asset": asset,  # Changed from 'currency' to 'asset'
             "description": description,
             "order_id": secrets.token_hex(16),
         }
@@ -135,7 +145,7 @@ def create_crypto_invoice(amount, currency="USDT", description="Valture License"
         response = requests.post(f"{CRYPTO_BOT_API}/createInvoice", json=payload, headers=headers, timeout=10)
         logger.debug(f"HTTP статус: {response.status_code}, Ответ: {response.text}")
         
-        response.raise_for_status()  # Raises exception for 4xx/5xx errors
+        response.raise_for_status()
         data = response.json()
         
         if data.get("ok"):
@@ -264,7 +274,7 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         logger.debug(f"Создание инвойса для пользователя: {username} (ID: {user_id})")
-        invoice, error = create_crypto_invoice(amount=10.0, currency="USDT", description="Valture License")
+        invoice, error = create_crypto_invoice(amount=10.0, asset="USDT", description="Valture License")
         if not invoice:
             error_msg = f"❌ *Ошибка*\n\nНе удалось создать инвойс: {error or 'Неизвестная ошибка'}. Попробуйте позже или обратитесь в поддержку (@s3pt1ck)."
             logger.error(f"Ошибка в pay_confirm: {error}")
