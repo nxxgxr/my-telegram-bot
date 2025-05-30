@@ -1,13 +1,15 @@
 import os
 import logging
 import secrets
-import uuid
+import hmac
+import hashlib
+import json
 from datetime import datetime, timezone, timedelta
 from threading import Thread
 
-from flask import Flask
+from flask import Flask, request, abort
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, Bot
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 import gspread
@@ -28,7 +30,8 @@ SCOPE = [
 YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID")
 YOOKASSA_SECRET_KEY = os.environ.get("YOOKASSA_SECRET_KEY")
 
-# --- Конфигурация ЮKassa ---
+if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
+    raise Exception("YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY должны быть заданы в переменных окружения")
 
 Configuration.account_id = YOOKASSA_SHOP_ID
 Configuration.secret_key = YOOKASSA_SECRET_KEY
@@ -41,7 +44,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Flask для keep-alive ---
+# --- Flask для keep-alive и вебхука ---
 
 app = Flask(__name__)
 
@@ -49,11 +52,47 @@ app = Flask(__name__)
 def home():
     return "✅ Valture бот работает!"
 
+def verify_signature(secret, body, signature):
+    computed = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(computed, signature)
+
+@app.route('/yookassa-webhook', methods=['POST'])
+def yookassa_webhook():
+    signature = request.headers.get('X-Request-Signature-SHA256')
+    body = request.get_data()
+    if not verify_signature(YOOKASSA_SECRET_KEY, body, signature):
+        logger.warning("Неверная подпись в webhook")
+        abort(400, "Invalid signature")
+
+    data = json.loads(body)
+    event = data.get('event')
+    logger.info(f"Получено событие от ЮKassa: {event}")
+
+    if event == 'payment.succeeded':
+        payment_obj = data.get('object', {}).get('payment', {})
+        username = payment_obj.get('metadata', {}).get('username')
+        if username:
+            try:
+                license_key = generate_license()
+                append_license_to_sheet(license_key, username)
+                # Отправка сообщения пользователю через Telegram Bot API
+                bot = Bot(token=BOT_TOKEN)
+                bot.send_message(chat_id=f"@{username}",
+                                 text=f"🎉 *Поздравляем с покупкой!*\n\nВаш лицензионный ключ:\n`{license_key}`\n\nСохраните его в надежном месте!",
+                                 parse_mode="Markdown")
+                logger.info(f"Лицензия отправлена пользователю @{username}")
+            except Exception as e:
+                logger.error(f"Ошибка при отправке лицензии: {e}")
+        else:
+            logger.warning("В webhook нет username в metadata")
+
+    return '', 200
+
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# --- Работа с Google Sheets ---
+# --- Google Sheets ---
 
 sheet_cache = None
 
@@ -70,52 +109,27 @@ def get_sheet():
             raise
     return sheet_cache
 
-def append_license_to_sheet(license_key, username):
-    try:
-        sheet = get_sheet()
-        utc_plus_2 = timezone(timedelta(hours=2))
-        now_utc_plus_2 = datetime.now(utc_plus_2)
-        now_str = now_utc_plus_2.strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([license_key, "", username, now_str])
-        logger.info(f"Лицензия {license_key} добавлена для {username}")
-    except Exception as e:
-        logger.error(f"Ошибка при добавлении лицензии: {e}")
-        raise
-
-# --- Генерация лицензионного ключа ---
+# --- Генерация и сохранение лицензии ---
 
 def generate_license(length=32):
-    try:
-        key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
-        logger.info(f"Сгенерирован ключ: {key}")
-        return key
-    except Exception as e:
-        logger.error(f"Ошибка при генерации ключа: {e}")
-        raise
+    key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
+    logger.info(f"Сгенерирован ключ: {key}")
+    return key
 
-# --- Создание платежа в ЮKassa ---
+def append_license_to_sheet(license_key, username):
+    sheet = get_sheet()
+    utc_plus_2 = timezone(timedelta(hours=2))
+    now_utc_plus_2 = datetime.now(utc_plus_2)
+    now_str = now_utc_plus_2.strftime("%Y-%m-%d %H:%M:%S")
+    sheet.append_row([license_key, "", username, now_str])
+    logger.info(f"Лицензия {license_key} добавлена для {username}")
 
-def create_payment(amount="1000.00", description="Покупка лицензии Valture") -> Payment:
-    payment = Payment.create({
-        "amount": {
-            "value": amount,
-            "currency": "RUB"
-        },
-        "confirmation": {
-            "type": "redirect",
-            "return_url": "https://t.me/valture_buy_bot"  # Сюда пользователь вернётся после оплаты
-        },
-        "capture": True,
-        "description": description
-    }, str(uuid.uuid4()))
-    return payment
-
-# --- Вспомогательные функции ---
+# --- Клавиатура ---
 
 def get_keyboard(buttons):
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
 
-# --- Обработчики команд и кнопок ---
+# --- Обработчики Telegram ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -176,38 +190,95 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    try:
-        payment = create_payment()
-        pay_url = payment.confirmation.confirmation_url
-
-        # Кнопки — первая с url, вторая с callback_data
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Оплатить", url=pay_url)],
-            [InlineKeyboardButton("Проверить оплату", callback_data="check_payment")]
-        ])
-
-        # Сохраняем payment_id для проверки
-        context.user_data["payment_id"] = payment.id
-
-        await query.edit_message_text(
-            "💳 Нажмите кнопку ниже, чтобы перейти к оплате.\n\n"
-            "После оплаты нажмите кнопку «Проверить оплату», чтобы получить лицензию.",
-            reply_markup=keyboard
-        )
-
-    except Exception as e:
-        logger.error(f"Ошибка при создании платежа: {e}")
-        await query.edit_message_text("❌ Не удалось создать платеж. Попробуйте позже.")
-
-async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    payment_id = context.user_data.get("payment_id")
-    if not payment_id:
-        await query.edit_message_text("❌ Нет информации о платеже. Пожалуйста, начните процесс оплаты заново.")
+    username = query.from_user.username
+    if not username:
+        await query.edit_message_text("❌ Для оплаты необходимо, чтобы в вашем профиле был указан username Telegram. Пожалуйста, добавьте его и попробуйте снова.")
         return
 
-   
-::contentReference[oaicite:0]{index=0}
- 
+    try:
+        # Создаем платеж в ЮKassa
+        payment = Payment.create({
+            "amount": {
+                "value": "1000.00",
+                "currency": "RUB"
+            },
+            "confirmation": {
+                "type": "redirect",
+                "return_url": "https://t.me/valture_bot"  # Замени на ссылку на бота или свой сайт
+            },
+            "capture": True,
+            "description": f"Покупка лицензии Valture пользователем @{username}",
+            "metadata": {
+                "username": username
+            }
+        }, uuid=secrets.token_hex(16))
+
+        payment_url = payment.confirmation.confirmation_url
+
+        text = (
+            f"🔗 *Перейдите по ссылке для оплаты:*\n\n"
+            f"[Оплатить лицензию за 1000₽]({payment_url})\n\n"
+            f"После успешной оплаты лицензионный ключ будет автоматически выслан вам в этот чат."
+        )
+        await query.edit_message_text(text, parse_mode="Markdown", disable_web_page_preview=True)
+    except Exception as e:
+        logger.error(f"Ошибка при создании платежа: {e}")
+        await query.edit_message_text("❌ Произошла ошибка при создании платежа. Попробуйте позже.")
+
+async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    text = "📰 *Новости Valture*\n\nЗдесь будут появляться обновления и важные анонсы."
+    buttons = [("🔙 Назад", "menu_main")]
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+
+async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    text = "❓ *FAQ*\n\nВопросы и ответы по использованию Valture."
+    buttons = [("🔙 Назад", "menu_main")]
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+
+async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    text = "📞 *Поддержка*\n\nЕсли у вас возникли вопросы, пишите сюда: @valture_support"
+    buttons = [("🔙 Назад", "menu_main")]
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+
+    if data == "menu_main":
+        await main_menu(update, context)
+    elif data == "menu_about":
+        await about(update, context)
+    elif data == "menu_pay":
+        await pay(update, context)
+    elif data == "pay_confirm":
+        await pay_confirm(update, context)
+    elif data == "menu_news":
+        await news(update, context)
+    elif data == "menu_faq":
+        await faq(update, context)
+    elif data == "menu_support":
+        await support(update, context)
+    else:
+        await query.answer("Неизвестная команда")
+
+# --- Основная функция запуска бота и Flask ---
+
+def main():
+    app_thread = Thread(target=run_flask)
+    app_thread.start()
+
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_handler))
+
+    logger.info("Бот запущен.")
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
