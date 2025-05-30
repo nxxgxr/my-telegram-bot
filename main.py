@@ -19,8 +19,8 @@ from yookassa import Configuration, Payment
 # --- Конфигурация (цены и ссылка на приложение) ---
 
 PRICES = {
-    "crypto": {"amount": 4.0, "currency": "TON", "approx_usd": 12.7},
-    "yookassa": {"amount": 1000.0, "currency": "RUB", "approx_usd": 12.7}
+    "crypto": {"amount": 0.01, "currency": "TON", "approx_usd": 12.7},
+    "yookassa": {"amount": 1.0, "currency": "RUB", "approx_usd": 12.7}
 }
 APP_DOWNLOAD_LINK = "https://www.dropbox.com/scl/fi/ze5ebd909z2qeaaucn56q/VALTURE.exe?rlkey=ihdzk8voej4oikrdhq0wfzvbb&st=jj5tgroa&dl=1"
 
