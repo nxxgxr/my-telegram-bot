@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from flask import Flask, request, jsonify
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -29,6 +29,7 @@ SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+APP_DOWNLOAD_LINK = "https://www.dropbox.com/scl/fi/ze5ebd909z2qeaaucn56q/VALTURE.exe?rlkey=ihdzk8voej4oikrdhq0wfzvbb&st=jj5tgroa&dl=1"
 
 # CryptoBot API endpoint
 CRYPTO_BOT_API = "https://pay.crypt.bot/api"
@@ -128,14 +129,17 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
         append_license_to_sheet(license_key, username)
         text = (
             "🎉 *Поздравляем с покупкой!*\n\n"
-            "Ваш лицензионный ключ:\n"
+            "Ваш лицензионный ключ (HWID):\n"
             f"`{license_key}`\n\n"
-            "Сохраните его в надежном месте! 🚀"
+            "Скачайте приложение:\n"
+            f"[VALTURE.exe]({APP_DOWNLOAD_LINK})\n\n"
+            "Сохраните ключ в надежном месте! 🚀"
         )
         await context.bot.send_message(
             chat_id=chat_id,
             text=text,
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            disable_web_page_preview=True
         )
         logger.info(f"YooKassa payment processed, key issued: {license_key} for {username}")
     except Exception as e:
@@ -174,9 +178,8 @@ def setup_google_creds():
     else:
         logger.info("Используется существующий файл Google credentials")
 
-# --- Логика Telegram бота ---
+# --- Логика Google Sheets ---
 
-# Кэш для данных Google Sheets
 sheet_cache = None
 
 def get_sheet():
@@ -216,6 +219,23 @@ def append_license_to_sheet(license_key, username):
     except Exception as e:
         logger.error(f"Ошибка при добавлении лицензии: {e}")
         raise
+
+def check_license_key(license_key):
+    """Проверка лицензионного ключа в Google Sheets."""
+    try:
+        sheet = get_sheet()
+        records = sheet.get_all_records()
+        for record in records:
+            if record.get('License Key') == license_key:
+                logger.info(f"Лицензия найдена: {license_key} для {record.get('Username')}")
+                return True, record.get('Username')
+        logger.warning(f"Лицензия не найдена: {license_key}")
+        return False, None
+    except Exception as e:
+        logger.error(f"Ошибка при проверке лицензии: {e}")
+        return False, None
+
+# --- Платежная логика ---
 
 def create_crypto_invoice(amount, asset="TON", description="Valture License"):
     """Создание инвойса через CryptoBot."""
@@ -327,6 +347,8 @@ def create_yookassa_payment(amount, description, user_id, username):
         logger.error(f"Ошибка при создании YooKassa платежа: {e}")
         return None, f"YooKassa ошибка: {str(e)}"
 
+# --- Логика Telegram бота ---
+
 def get_keyboard(buttons):
     """Создание клавиатуры с кнопками."""
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
@@ -342,13 +364,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Главное меню без кнопки 'Назад'."""
+    """Главное меню с кнопкой проверки лицензии."""
     query = update.callback_query
     await query.answer()
     buttons = [
+        ("💳 Купить лицензию", "menu_pay"),
+        ("🔑 Проверить лицензию", "check_license"),
         ("ℹ️ О Valture", "menu_about"),
         ("📰 Новости", "menu_news"),
-        ("💳 Купить лицензию", "menu_pay"),
         ("❓ FAQ", "menu_faq"),
         ("📞 Поддержка", "menu_support"),
     ]
@@ -359,7 +382,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Информация о приложении с кнопкой 'Назад'."""
+    """Информация о приложении."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -369,12 +392,12 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Наша миссия — вывести вашу игровую производительность на новый уровень, обеспечив максимальную плавность, "
         "стабильность и отзывчивость системы. С Valture вы получите конкурентное преимущество, о котором всегда мечтали.\n\n"
         "🔥 *Почему выбирают Valture?*\n"
-        "🚀 Увеличение FPS на 20–30%: Оптимизируйте производительность вашей системы, чтобы добиться максимальной частоты кадров.\n"
-        "🛡️ Стабильный фреймрейт: Забудьте о лагах и просадках FPS — Valture обеспечивает плавный игровой процесс.\n"
-        "💡 Молниеносная отзывчивость: Сократите время отклика системы, чтобы каждый ваш клик или движение были мгновенными.\n"
-        "🔋 Оптимизация Windows: Полная настройка операционной системы для максимальной производительности в играх.\n"
-        "🛳️  Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
-        "🖥️  Плавность картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
+        "🚀 Увеличение FPS на 20–30%\n"
+        "🛡️ Стабильный фреймрейт\n"
+        "💡 Молниеносная отзывчивость\n"
+        "🔋 Оптимизация Windows\n"
+        "🛳️ Плавность управления\n"
+        "🖥️ Плавность картинки в играх\n\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "_Создано для геймеров, которые ценят качество и стремятся к победе._"
     )
@@ -382,16 +405,18 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Меню оплаты с обновленной ценой и кнопкой 'Назад'."""
+    """Меню оплаты с ценами сверху."""
     query = update.callback_query
     await query.answer()
     text = (
         "💳 *Покупка лицензии Valture*\n\n"
-        "Цена: *4 TON* или *1000 RUB (~$12.7)*\n"
+        "💰 *Цены:*\n"
+        "- *4 TON* (~$12.7)\n"
+        "- *1000 RUB* (~$12.7)\n\n"
         "Выберите способ оплаты:\n"
         "- *CryptoBot*: Оплата через криптовалюту.\n"
         "- *YooKassa*: Оплата картой.\n\n"
-        "Ключ будет отправлен в чат после оплаты."
+        "После оплаты вы получите HWID-ключ и ссылку на приложение."
     )
     buttons = [
         ("💸 Оплатить через CryptoBot", "pay_crypto"),
@@ -401,7 +426,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Подтверждение оплаты через CryptoBot с кнопкой 'Назад'."""
+    """Подтверждение оплаты через CryptoBot."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -451,7 +476,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "💸 *Оплатите через CryptoBot*\n\n"
             "Нажмите ниже для оплаты *4 TON*:\n"
             f"[Оплатить через CryptoBot]({pay_url})\n\n"
-            "После оплаты подтвердите ниже, чтобы получить ключ."
+            "После оплаты подтвердите ниже, чтобы получить ключ и приложение."
         )
         buttons = [
             ("✅ Подтвердить оплату", "pay_verify"),
@@ -526,7 +551,7 @@ async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
             "💳 *Оплатите через YooKassa*\n\n"
             "Нажмите ниже для оплаты *1000 RUB*:\n"
             f"[Оплатить через YooKassa]({confirmation_url})\n\n"
-            "Ключ будет отправлен автоматически после оплаты."
+            "Ключ и ссылка на приложение будут отправлены автоматически после оплаты."
         )
         buttons = [("🔙 Назад к способам оплаты", "menu_pay")]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
@@ -543,7 +568,7 @@ async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка оплаты с кнопкой 'Назад'."""
+    """Проверка оплаты CryptoBot."""
     query = update.callback_query
     await query.answer()
 
@@ -584,13 +609,15 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
             append_license_to_sheet(license_key, username)
             text = (
                 "🎉 *Поздравляем с покупкой!*\n\n"
-                "Ваш лицензионный ключ:\n"
+                "Ваш лицензионный ключ (HWID):\n"
                 f"`{license_key}`\n\n"
-                "Сохраните его в надежном месте! 🚀"
+                "Скачайте приложение:\n"
+                f"[VALTURE.exe]({APP_DOWNLOAD_LINK})\n\n"
+                "Сохраните ключ в надежном месте! 🚀"
             )
             buttons = [("🏠 Назад в главное меню", "menu_main")]
             logger.info(f"CryptoBot оплата подтверждена, ключ выдан: {license_key} для {username}")
-            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
             context.user_data.clear()
         else:
             logger.warning(f"CryptoBot оплата не подтверждена для invoice_id={invoice_id}, статус: {status}")
@@ -615,8 +642,64 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
+async def check_license(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запрос ввода лицензионного ключа."""
+    query = update.callback_query
+    await query.answer()
+    text = (
+        "🔑 *Проверка лицензии*\n\n"
+        "Пожалуйста, отправьте ваш HWID-ключ в ответ на это сообщение."
+    )
+    buttons = [("🔙 Назад в главное меню", "menu_main")]
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+    context.user_data["awaiting_license_key"] = True
+
+async def handle_license_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка введенного лицензионного ключа."""
+    if not context.user_data.get("awaiting_license_key"):
+        return
+
+    license_key = update.message.text.strip()
+    context.user_data["awaiting_license_key"] = False
+
+    try:
+        is_valid, username = check_license_key(license_key)
+        if is_valid:
+            text = (
+                "✅ *Лицензия действительна!*\n\n"
+                f"Ключ: `{license_key}`\n"
+                f"Принадлежит: @{username}\n\n"
+                "Скачайте приложение, если еще не скачали:\n"
+                f"[VALTURE.exe]({APP_DOWNLOAD_LINK})"
+            )
+            buttons = [("🏠 Назад в главное меню", "menu_main")]
+            logger.info(f"Лицензия подтверждена: {license_key} для {username}")
+        else:
+            text = (
+                "❌ *Ключ недействителен!*\n\n"
+                "Проверьте правильность ключа или свяжитесь с @s3pt1ck."
+            )
+            buttons = [
+                ("🔄 Проверить другой ключ", "check_license"),
+                ("🏠 Назад в главное меню", "menu_main")
+            ]
+            logger.warning(f"Попытка проверки недействительного ключа: {license_key}")
+        
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
+    except Exception as e:
+        logger.error(f"Ошибка при проверке ключа: {e}")
+        text = (
+            "❌ *Ошибка при проверке ключа!*\n\n"
+            "Попробуйте снова или свяжитесь с @s3pt1ck."
+        )
+        buttons = [
+            ("🔄 Проверить другой ключ", "check_license"),
+            ("🏠 Назад в главное меню", "menu_main")
+        ]
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Меню поддержки с кнопкой 'Назад'."""
+    """Меню поддержки."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -629,7 +712,7 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """FAQ с краткими ответами и кнопкой 'Назад'."""
+    """FAQ."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -637,7 +720,7 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 *Как получить лицензию?*\n"
         "Перейдите в 'Купить лицензию' и выберите способ оплаты.\n\n"
         "🔹 *Что делать, если ключ не работает?*\n"
-        "Напишите в поддержку @s3pt1ck.\n\n"
+        "Используйте 'Проверить лицензию' или напишите @s3pt1ck.\n\n"
         "🔹 *Можно ли использовать ключ на нескольких устройствах?*\n"
         "Нет, ключ привязан к одному устройству."
     )
@@ -645,7 +728,7 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Раздел новостей с кнопкой 'Назад'."""
+    """Раздел новостей."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -675,6 +758,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await pay_yookassa_confirm(update, context)
     elif data == "pay_verify":
         await pay_verify(update, context)
+    elif data == "check_license":
+        await check_license(update, context)
     elif data == "menu_support":
         await support(update, context)
     elif data == "menu_faq":
@@ -693,6 +778,7 @@ if __name__ == "__main__":
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_license_key))
 
     logger.info("Valture бот запущен")
     application.run_polling()
