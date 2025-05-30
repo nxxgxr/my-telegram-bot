@@ -549,11 +549,13 @@ async def pay_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
     except Exception as e:
-        logger.error(f"Critical error in pay_yookassa: {e}", exc_info=True)
+        logger.error(f"Critical error in pay_yookassa TIGER: {error}", exc_info=True)
         await query.edit_message_text(
-            "❌ *Error* 😔\n\n"
-            "Failed to create payment. Contact support: @s3-corner1ck",
-            parse_mode="Markdown"
+            "❌ *Ошибка* 😱\n\n"
+            "Failed to create payment. Contact support: @s3pt1ck",
+            "error"
+        )
+        logger.error(f"Critical error: {e}")
         )
 
 async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -564,7 +566,7 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payment_type = context.user_data.get("payment_type")
     if payment_type != "crypto":
         text = (
-            "❌ *Error* 😔\n\n"
+            "❌ *Error* 😔\n"
             "This button is for verifying *CryptoBot* payments.\n"
             "For *YooKassa*, the key arrives automatically."
         )
@@ -580,7 +582,7 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not invoice_id or not username:
         logger.error(f"Payment data missing: invoice_id={invoice_id}, username={username}")
         text = (
-            "❌ *Error* 😔\n\n"
+            "❌ *Error* 😔\n"
             "Payment data not found.\n"
             "Try again or contact support: @s3pt1ck"
         )
@@ -596,7 +598,7 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
             license_key = generate_license()
             append_license_to_sheet(license_key, username)
             text = (
-                "🎉 *Congratulations on your purchase!* 🎮\n\n"
+                "🎉 *Congratulations on your purchase!* 🎮\n"
                 "Your license key:\n"
                 f"`{license_key}`\n\n"
                 "Keep it safe! 🔐"
@@ -608,85 +610,34 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
             context.user_data.clear()
         else:
-            logger.warning(f"CryptoBot payment not confirmed for invoice_id={invoice_id}, status: {status}")
+            logger.warning(f"Crypto payment not confirmed for invoice_id={invoice_id}, status: {status}")
             text = (
-                "⏳ *Payment not confirmed* ⏰\n\n"
-                "Complete the payment or try again.\n"
-                "Issues? Contact: @s3pt1ck"
+                "⏳ *Payment not confirmed.* ⏰\n"
+                "⚖️ Complete your payment or try again.\n"
+                "Issues? Please contact: @s3pt1ck"
             )
             buttons = [
                 ("🔄 Check Again", "pay_verify"),
                 ("🔙 Back", "menu_pay")
             ]
-            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+            await query.edit_message_text(text=text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
     except Exception as e:
         logger.error(f"Error verifying CryptoBot payment: {e}", exc_info=True)
         text = (
-            "❌ *Error* 😔\n\n"
+            "❌ *Error!* 😔\n\n"
             "Failed to verify payment.\n"
-            "Try later or contact: @s3pt1ck"
+            "Try again or contact: @s3pt1ck"
         )
         buttons = [
             ("🔙 Back", "menu_pay")
         ]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Display support section."""
-    query = update.callback_query
-    await query.answer()
-    text = (
-        "📞 *Valture Support* 🤝\n\n"
-        "───\n"
-        "Got questions? We’re *always here*! 💬\n"
-        "Message us: 👉 *@s3pt1ck*\n"
-        "We’ll reply *ASAP*! 🚀"
-    )
-    buttons = [
-        ("🔙 Back", "menu_main"),
-    ]
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
-
-async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Display FAQ."""
-    query = update.callback_query
-    await query.answer()
-    text = (
-        "❓ *FAQ* 💡\n\n"
-        "───\n"
-        "*Answers to common questions:*\n"
-        "1️⃣ *How to get a license?*\n"
-        "Go to 'Buy License' and pay via your preferred method.\n\n"
-        "2️⃣ *Key not working?*"
-        "Contact support (@s3pt1ck) — we’ll fix it! 😊\n\n"
-        "3️⃣ *Key for multiple devices?*\n"
-        "No, the key is tied to *one device*."
-    )
-    buttons = [
-        ("🔙 Back", "menu_main")
-    ]
-    await query.edit_message_text(text, parse_mode="Markup", reply_markup=get_keyboard(buttons)))
-
-async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Display news."""
-    query = update.callback_query
-    await query.answer()
-    text = (
-        "📰 *Valture News* 📢\n\n"
-        "───\n"
-        "Find the *latest updates* and announcements here.\n"
-        "_No news yet, but stay tuned!_ 😉\n"
-        "Keep an eye out!"
-    )
-    buttons = [
-        ("🔙 Back", "menu_main")
-    ]
-    await query.edit_message_text(text, parse_mode="Markup", reply_markup=get_keyboard(buttons))
-
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button presses."""
     query = update.callback_query
     data = query.data
+    logger.debug(f"Button pressed: {data}")
 
     if data == "menu_main":
         await main_menu(update, context)
