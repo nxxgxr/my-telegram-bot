@@ -656,7 +656,7 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if status == "paid":
             license_key = generate_license()
             append_license_to_sheet(license_key, username)
-            text = (
+            text = (
                 "🎉 *Поздравляем с покупкой!*\n\n"
                 f"📥 Скачайте приложение Valture: [Скачать]({APP_DOWNLOAD_LINK})\n\n"
                 "Ваш лицензионный ключ:\n"
@@ -709,7 +709,7 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка при проверке CryptoBot оплаты: {e}", exc_info=True)
         text = (
             "❌ *Что-то пошло не так!*\n\n"
-            "Не удалось проверить оплату. Попробуйте_ARM снова или свяжитесь с @s3pt1ck."
+            "Не удалось проверить оплату. Попробуйте снова или свяжитесь с @s3pt1ck."
         )
         buttons = [
             ("🔄 Проверить снова", "pay_verify"),
