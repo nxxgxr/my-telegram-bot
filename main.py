@@ -8,7 +8,16 @@ from threading import Thread
 from flask import Flask
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+import aiohttp
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -18,12 +27,10 @@ from google.oauth2.service_account import Credentials
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME")
 
-# Либо путь к JSON-файлу, либо base64 содержимое
-CREDS_FILE = os.environ.get("CREDS_FILE")  # Имя файла, если загружаете в Railway как файл
+CREDS_FILE = os.environ.get("CREDS_FILE")
+GOOGLE_CREDS_JSON_BASE64 = os.environ.get("GOOGLE_CREDS_JSON_BASE64")
 
-GOOGLE_CREDS_JSON_BASE64 = os.environ.get("GOOGLE_CREDS_JSON_BASE64")  # Если используете base64
-
-if GOOGLE_CREDS_JSON_BASE64:
+if GOOGLE_CREDS_JSON_BASE64 and not CREDS_FILE:
     with open("valture-license-bot-account.json", "wb") as f:
         f.write(base64.b64decode(GOOGLE_CREDS_JSON_BASE64))
     CREDS_FILE = "valture-license-bot-account.json"
@@ -33,11 +40,13 @@ SCOPE = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN")
+
 # --- Логирование ---
 
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
@@ -45,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-@app.route('/')
+@app.route("/")
 def home():
     return "✅ Valture бот работает!"
 
@@ -53,7 +62,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# --- Логика Telegram бота ---
+# --- Работа с Google Sheets ---
 
 sheet_cache = None
 
@@ -71,13 +80,7 @@ def get_sheet():
     return sheet_cache
 
 def generate_license(length=32):
-    try:
-        key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
-        logger.info(f"Сгенерирован ключ: {key}")
-        return key
-    except Exception as e:
-        logger.error(f"Ошибка при генерации ключа: {e}")
-        raise
+    return ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
 
 def append_license_to_sheet(license_key, username):
     try:
@@ -94,7 +97,7 @@ def append_license_to_sheet(license_key, username):
 def get_keyboard(buttons):
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
 
-# --- Обработчики команд и кнопок ---
+# --- Обработчики Telegram ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -103,7 +106,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "которые стремятся к максимальной производительности и стабильности.\n\n"
         "Выберите действие в меню ниже:"
     )
-    await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_keyboard([("📋 Открыть меню", "menu_main")]))
+    await update.message.reply_text(
+        welcome_text,
+        parse_mode="Markdown",
+        reply_markup=get_keyboard([("📋 Открыть меню", "menu_main")]),
+    )
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -115,7 +122,11 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ("❓ FAQ", "menu_faq"),
         ("📞 Поддержка", "menu_support"),
     ]
-    await query.edit_message_text("🏠 *Главное меню*\n\nВыберите раздел:", parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+    await query.edit_message_text(
+        "🏠 *Главное меню*\n\nВыберите раздел:",
+        parse_mode="Markdown",
+        reply_markup=get_keyboard(buttons),
+    )
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -151,45 +162,47 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = [("✅ Оплатить", "pay_confirm"), ("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-# Добавляем оплату через CryptoBot
-import aiohttp
-
-CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN")  # Ваш токен криптобота, тоже в Variables
-
 async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # Создаем invoice через CryptoBot API
+    if not CRYPTOBOT_API_TOKEN:
+        await query.edit_message_text("❌ Токен CryptoBot не настроен. Обратитесь к администратору.")
+        return
+
     invoice_data = {
         "chat_id": query.from_user.id,
         "amount": 1000,  # сумма в рублях
         "currency": "RUB",
-        "payload": "valture_license_purchase"
+        "payload": "valture_license_purchase",
     }
 
     headers = {
         "Authorization": f"Bearer {CRYPTOBOT_API_TOKEN}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     async with aiohttp.ClientSession() as session:
-        async with session.post("https://pay.crypt.bot/invoice", json=invoice_data, headers=headers) as resp:
+        async with session.post(
+            "https://pay.crypt.bot/invoice", json=invoice_data, headers=headers
+        ) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 pay_url = data.get("pay_url")
                 if pay_url:
                     buttons = [[InlineKeyboardButton("Перейти к оплате", url=pay_url)]]
                     keyboard = InlineKeyboardMarkup(buttons)
-                    await query.edit_message_text("Нажмите кнопку ниже, чтобы оплатить лицензию:", reply_markup=keyboard)
+                    await query.edit_message_text(
+                        "Нажмите кнопку ниже, чтобы оплатить лицензию:", reply_markup=keyboard
+                    )
                     return
-            # Если что-то пошло не так
             await query.edit_message_text("❌ Ошибка создания платежа. Попробуйте позже.")
 
-# Эхо для подтверждения webhook-а CryptoBot (при необходимости)
+# ЗАГОТОВКА для webhook CryptoBot — допиши сам по нуждам
 async def cryptobot_webhook(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Здесь нужно реализовать логику обработки уведомлений от CryptoBot,
-    # например, подтверждение оплаты и выдача ключа
+    # сюда придут уведомления о платежах
+    # надо проверить, что оплата успешна, сгенерировать ключ,
+    # записать в Google Sheets и отправить пользователю
     pass
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -212,29 +225,17 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "— Как активировать лицензию?\n"
         "После оплаты ключ придет в этот чат.\n\n"
         "— Можно ли вернуть деньги?\n"
-        "Политика возврата описана в условиях на сайте.\n\n"
-        "— Поддерживается ли обновление?\n"
-        "Да, лицензия действует на все обновления."
-    )
-    buttons = [("🔙 Назад", "menu_main")]
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
-
-async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    text = (
-        "📰 *Новости Valture*\n\n"
-        "- Обновление 1.2: улучшена стабильность\n"
-        "- Скоро скидки на лицензии!\n"
-        "- Следите за новостями здесь."
+        "Нет, все продажи окончательные.\n\n"
+        "— Что делать, если не получил ключ?\n"
+        "Свяжитесь с поддержкой."
     )
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Извините, я не понимаю эту команду.")
+    await update.message.reply_text("⚠️ Неизвестная команда. Используйте /start для начала.")
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
@@ -250,30 +251,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await support(update, context)
     elif data == "menu_faq":
         await faq(update, context)
-    elif data == "menu_news":
-        await news(update, context)
     else:
-        await query.answer("Команда не распознана", show_alert=True)
+        await query.answer("Неизвестная команда", show_alert=True)
 
-# --- Основная функция запуска бота ---
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Ошибка: {context.error}")
+
+# --- Запуск бота и Flask ---
 
 def main():
-    # Запускаем Flask сервер в отдельном потоке
-    Thread(target=run_flask).start()
-
-    # Создаём приложение Telegram бота
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Команды
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(callback_handler))
+    application.add_handler(MessageHandler(filters.COMMAND, unknown))
 
-    # Обработка кнопок
-    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_error_handler(error_handler)
 
-    # Обработка неизвестных команд
-    application.add_handler(CommandHandler(None, unknown))
+    # Запускаем Flask в отдельном потоке
+    Thread(target=run_flask, daemon=True).start()
 
-    # Запускаем бота
+    # Запуск бота
     application.run_polling()
 
 if __name__ == "__main__":
