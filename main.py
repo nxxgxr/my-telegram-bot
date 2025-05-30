@@ -1,7 +1,7 @@
 # Конфигурация цен
 PRICES = {
     "valture_license_crypto": 0.01,    # Цена в TON для CryptoBot
-    "valture_license_rub": 1.0     # Цена в RUB для YooKassa
+    "valture_license_rub": 1.0         # Цена в RUB для YooKassa
 }
 
 import os
@@ -36,6 +36,7 @@ SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+WEBHOOK_URL = "https://rabochij-production.up.railway.app/cryptobot-webhook"
 
 # CryptoBot API endpoint
 CRYPTO_BOT_API = "https://pay.crypt.bot/api"
@@ -176,7 +177,7 @@ def cryptobot_webhook():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
-    """Process confirmed YooKassa payment and issue HWID key."""
+    """Process confirmed YooKassa payment and send document."""
     job_context = context.job.context
     payment_id = job_context['payment_id']
     user_id = job_context['user_id']
@@ -184,25 +185,19 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
     chat_id = job_context['chat_id']
 
     try:
-        hwid_key = generate_hwid_key()
-        append_license_to_sheet(hwid_key, username)
-        text = (
-            "🎉 *Поздравляем с покупкой!*\n\n"
-            "Ваш HWID ключ:\n"
-            f"`{hwid_key}`\n\n"
-            "Сохраните его в надежном месте! 🚀"
-        )
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            parse_mode="Markdown"
-        )
-        logger.info(f"YooKassa payment processed, HWID key issued: {hwid_key} for {username}")
+        append_payment_to_sheet(payment_id, username, "YooKassa")
+        with open('qw.docx', 'rb') as document:
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=document,
+                caption="Оплата прошла успешно!✅ Вот ваш документ."
+            )
+        logger.info(f"YooKassa payment processed, document sent for payment_id={payment_id}, user={username}")
     except Exception as e:
         logger.error(f"Error processing YooKassa payment {payment_id}: {str(e)}", exc_info=True)
         error_text = (
             "❌ *Произошла ошибка!*\n\n"
-            f"Не удалось выдать HWID ключ. Обратитесь в поддержку: @s3pt1ck. Ошибка: {str(e)}"
+            f"Не удалось отправить документ. Обратитесь в поддержку: @s3pt1ck. Ошибка: {str(e)}"
         )
         await context.bot.send_message(
             chat_id=chat_id,
@@ -211,7 +206,7 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def process_crypto_payment(context: ContextTypes.DEFAULT_TYPE):
-    """Process confirmed CryptoBot payment and issue HWID key."""
+    """Process confirmed CryptoBot payment and send document."""
     job_context = context.job.context
     invoice_id = job_context['invoice_id']
     user_id = job_context['user_id']
@@ -219,25 +214,19 @@ async def process_crypto_payment(context: ContextTypes.DEFAULT_TYPE):
     chat_id = job_context['chat_id']
 
     try:
-        hwid_key = generate_hwid_key()
-        append_license_to_sheet(hwid_key, username)
-        text = (
-            "🎉 *Поздравляем с покупкой!*\n\n"
-            "Ваш HWID ключ:\n"
-            f"`{hwid_key}`\n\n"
-            "Сохраните его в надежном месте! 🚀"
-        )
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            parse_mode="Markdown"
-        )
-        logger.info(f"CryptoBot payment processed, HWID key issued: {hwid_key} for {username}")
+        append_payment_to_sheet(invoice_id, username, "CryptoBot")
+        with open('qw.docx', 'rb') as document:
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=document,
+                caption="Оплата прошла успешно!✅ Вот ваш документ."
+            )
+        logger.info(f"CryptoBot payment processed, document sent for invoice_id={invoice_id}, user={username}")
     except Exception as e:
         logger.error(f"Error processing CryptoBot payment {invoice_id}: {str(e)}", exc_info=True)
         error_text = (
             "❌ *Произошла ошибка!*\n\n"
-            f"Не удалось выдать HWID ключ. Обратитесь в поддержку: @s3pt1ck. Ошибка: {str(e)}"
+            f"Не удалось отправить документ. Обратитесь в поддержку: @s3pt1ck. Ошибка: {str(e)}"
         )
         await context.bot.send_message(
             chat_id=chat_id,
@@ -289,27 +278,17 @@ def get_sheet():
             raise
     return sheet_cache
 
-def generate_hwid_key(length=32):
-    """Генерация безопасного HWID ключа."""
-    try:
-        key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
-        logger.info(f"Сгенерирован HWID ключ: {key}")
-        return key
-    except Exception as e:
-        logger.error(f"Ошибка при генерации HWID ключа: {e}")
-        raise
-
-def append_license_to_sheet(hwid_key, username):
-    """Добавление HWID ключа в Google Sheets."""
+def append_payment_to_sheet(payment_id, username, payment_method):
+    """Добавление информации о платеже в Google Sheets."""
     try:
         sheet = get_sheet()
         utc_plus_2 = timezone(timedelta(hours=2))
         now_utc_plus_2 = datetime.now(utc_plus_2)
         now_str = now_utc_plus_2.strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([hwid_key, "", username, now_str])
-        logger.info(f"HWID ключ {hwid_key} добавлен для {username}")
+        sheet.append_row([payment_id, username, payment_method, now_str])
+        logger.info(f"Payment {payment_id} added to sheet for {username} via {payment_method}")
     except Exception as e:
-        logger.error(f"Ошибка при добавлении HWID ключа: {e}")
+        logger.error(f"Ошибка при добавлении платежа в Google Sheets: {e}")
         raise
 
 def create_crypto_invoice(amount, user_id, username, asset="TON", description="Valture License"):
@@ -460,11 +439,11 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     text = (
         f"💳 *Покупка лицензии Valture*\n\n"
-        f"Цена: *{PRICES['valture_license_crypto']} TON* или *{PRICES['valture_license_rub']} RUB (~$12.7)*\n"
+        f"Цена: *{PRICES['valture_license_crypto']} TON* или *{PRICES['valture_license_rub']} RUB*\n"
         "Выберите способ оплаты:\n"
         "- *CryptoBot*: Оплата через криптовалюту.\n"
         "- *YooKassa*: Оплата картой.\n\n"
-        "HWID ключ будет отправлен в чат сразу после оплаты."
+        "Документ будет отправлен в чат сразу после оплаты."
     )
     buttons = [
         ("💸 Оплатить через CryptoBot", "pay_crypto"),
@@ -531,7 +510,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"💸 *Оплатите через CryptoBot*\n\n"
             f"Нажмите ниже для оплаты *{PRICES['valture_license_crypto']} TON*:\n"
             f"[Оплатить через CryptoBot]({pay_url})\n\n"
-            "HWID ключ будет отправлен автоматически после оплаты."
+            "Документ будет отправлен автоматически после оплаты."
         )
         buttons = [("🔙 Назад к способам оплаты", "menu_pay")]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
@@ -604,7 +583,7 @@ async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
             f"💳 *Оплатите через YooKassa*\n\n"
             f"Нажмите ниже для оплаты *{PRICES['valture_license_rub']} RUB*:\n"
             f"[Оплатить через YooKassa]({confirmation_url})\n\n"
-            "HWID ключ будет отправлен автоматически после оплаты."
+            "Документ будет отправлен автоматически после оплаты."
         )
         buttons = [("🔙 Назад к способам оплаты", "menu_pay")]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
@@ -641,12 +620,13 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "❓ *Часто задаваемые вопросы*\n\n"
         "🔹 *Как получить лицензию?*\n"
         "Перейдите в 'Купить лицензию' и выберите способ оплаты.\n\n"
-        "🔹 *Что делать, если HWID ключ не работает?*\n"
+        "🔹 *Что делать, если документ не пришел?*\n"
         "Напишите в поддержку @s3pt1ck.\n\n"
         "🔹 *Можно ли использовать ключ на нескольких устройствах?*\n"
-        "Нет, ключ привязан к одному устройству."
+        "Нет, ключевой привязан к одному устройству."
     )
     buttons = [("🔙 Назад в главное меню", "menu_main")]
+    buttons = [("Return to main menu", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -690,6 +670,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == "__main__":
     # Запуск Flask в отдельном потоке
     Thread(target=run_flask).start()
+
+    # Установка webhook для CryptoBot
+    try:
+        headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN, "Content-Type": "application/json"}
+        response = requests.post(
+            f"{CRYPTO_BOT_API}/setWebhook",
+            headers=headers,
+            json={"url": WEBHOOK_URL},
+            timeout=10
+        )
+        if response.ok and response.json().get('ok'):
+            logger.info("CryptoBot webhook successfully set")
+        else:
+            logger.error(f"Failed to set webhook: {response.text}")
+    except Exception as e:
+        logger.error(f"Error setting CryptoBot webhook: {str(e)}")
 
     # Запуск бота
     application = Application.builder().token(BOT_TOKEN).build()
