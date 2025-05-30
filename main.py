@@ -5,8 +5,6 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from threading import Thread
 
-from flask import Flask
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -41,18 +39,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Flask для keep-alive ---
-
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "✅ Valture бот работает!"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
-
 # --- Работа с Google Sheets ---
 
 sheet_cache = None
@@ -85,13 +71,9 @@ def append_license_to_sheet(license_key, username):
 # --- Генерация лицензионного ключа ---
 
 def generate_license(length=32):
-    try:
-        key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
-        logger.info(f"Сгенерирован ключ: {key}")
-        return key
-    except Exception as e:
-        logger.error(f"Ошибка при генерации ключа: {e}")
-        raise
+    key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
+    logger.info(f"Сгенерирован ключ: {key}")
+    return key
 
 # --- Создание платежа в ЮKassa ---
 
@@ -103,7 +85,7 @@ def create_payment(amount="1000.00", description="Покупка лицензи�
         },
         "confirmation": {
             "type": "redirect",
-            "return_url": "https://t.me/valture_buy_bot"  # Сюда пользователь вернётся после оплаты
+            "return_url": "https://t.me/valture_buy_bot"  # Телеграм-ссылка для возврата
         },
         "capture": True,
         "description": description
@@ -115,13 +97,11 @@ def create_payment(amount="1000.00", description="Покупка лицензи�
 def get_keyboard(buttons):
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
 
-# --- Обработчики команд и кнопок ---
+# --- Обработчики ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "👋 *Добро пожаловать в Valture!*\n\n"
-        "Мы предлагаем профессиональный инструмент для геймеров, "
-        "которые стремятся к максимальной производительности и стабильности.\n\n"
         "Выберите действие в меню ниже:"
     )
     await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_keyboard([("📋 Открыть меню", "menu_main")]))
@@ -131,7 +111,6 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     buttons = [
         ("ℹ️ О приложении", "menu_about"),
-        ("📰 Новости", "menu_news"),
         ("💳 Купить лицензию", "menu_pay"),
         ("❓ FAQ", "menu_faq"),
         ("📞 Поддержка", "menu_support"),
@@ -143,19 +122,9 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     text = (
         "✨ *Valture — Ваш путь к совершенству в играх*\n\n"
-        "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        "Valture — это передовой инструмент, созданный для геймеров, которые не готовы мириться с компромиссами. "
-        "Наша миссия — вывести вашу игровую производительность на новый уровень, обеспечив максимальную плавность, "
-        "стабильность и отзывчивость системы. С Valture вы получите конкурентное преимущество, о котором всегда мечтали.\n\n"
-        "🔥 *Почему выбирают Valture?*\n"
-        "🚀 Увеличение FPS на 20–30%: Оптимизируйте производительность вашей системы, чтобы добиться максимальной частоты кадров.\n"
-        "🛡️ Стабильный фреймрейт: Забудьте о лагах и просадках FPS — Valture обеспечивает плавный игровой процесс.\n"
-        "💡 Молниеносная отзывчивость: Сократите время отклика системы, чтобы каждый ваш клик или движение были мгновенными.\n"
-        "🔋 Оптимизация Windows: Полная настройка операционной системы для максимальной производительности в играх.\n"
-        "🛳️  Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
-        "🖥️  Плавность картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
-        "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        "_Создано для геймеров, которые ценят качество и стремятся к победе._"
+        "Мы помогаем повысить производительность и стабильность.\n\n"
+        "➖➖➖\n"
+        "_Создано для геймеров._"
     )
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -166,7 +135,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "💳 *Приобретение лицензии Valture*\n\n"
         "Стоимость: *1000 рублей*\n"
-        "После оплаты вы получите уникальный ключ прямо в чат.\n\n"
+        "После оплаты получите уникальный ключ.\n\n"
         "Готовы продолжить?"
     )
     buttons = [("✅ Оплатить", "pay_confirm"), ("🔙 Назад", "menu_main")]
@@ -175,23 +144,15 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     try:
         payment = create_payment()
         pay_url = payment.confirmation.confirmation_url
 
-        buttons = [
-            ("Оплатить", pay_url),
-            ("Проверить оплату", "check_payment")
-        ]
-
-        # Кнопки — первая с url, вторая с callback_data
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Оплатить", url=pay_url)],
             [InlineKeyboardButton("Проверить оплату", callback_data="check_payment")]
         ])
 
-        # Сохраняем payment_id для проверки
         context.user_data["payment_id"] = payment.id
 
         await query.edit_message_text(
@@ -199,7 +160,6 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "После оплаты нажмите кнопку «Проверить оплату», чтобы получить лицензию.",
             reply_markup=keyboard
         )
-
     except Exception as e:
         logger.error(f"Ошибка при создании платежа: {e}")
         await query.edit_message_text("❌ Не удалось создать платеж. Попробуйте позже.")
@@ -210,7 +170,7 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     payment_id = context.user_data.get("payment_id")
     if not payment_id:
-        await query.edit_message_text("❌ Нет информации о платеже. Пожалуйста, начните процесс оплаты заново.")
+        await query.edit_message_text("❌ Нет информации о платеже. Начните оплату заново.")
         return
 
     try:
@@ -227,7 +187,7 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("payment_id", None)
 
         elif payment.status == "pending":
-            await query.answer("Оплата еще не завершена, попробуйте чуть позже.", show_alert=True)
+            await query.answer("Оплата еще не завершена, попробуйте позже.", show_alert=True)
 
         else:
             await query.edit_message_text(f"Статус платежа: {payment.status}. Попробуйте оплатить заново.")
@@ -242,9 +202,7 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     text = (
         "📞 *Поддержка Valture*\n\n"
-        "Если у вас возникли вопросы или проблемы, свяжитесь с нами:\n"
-        "Telegram: @valture_support\n"
-        "Email: support@valture.com"
+        "Telegram: @valture_support"
     )
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -255,25 +213,11 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "❓ *FAQ*\n\n"
         "Q: Что такое Valture?\n"
-        "A: Это оптимизатор для повышения производительности в играх.\n\n"
+        "A: Оптимизатор для игр.\n\n"
         "Q: Как получить лицензию?\n"
         "A: Оплатить через ЮKassa и получить ключ здесь.\n\n"
         "Q: Куда вводить ключ?\n"
-        "A: В приложении Valture.\n\n"
-        "Если не нашли ответ, пишите в поддержку."
-    )
-    buttons = [("🔙 Назад", "menu_main")]
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
-
-async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    text = (
-        "📰 *Новости Valture*\n\n"
-        "- Новая версия с улучшенной оптимизацией.\n"
-        "- Скидка 10% до конца месяца.\n"
-        "- Скоро выйдет мобильное приложение.\n\n"
-        "Следите за обновлениями!"
+        "A: В приложении Valture."
     )
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -296,24 +240,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await support(update, context)
     elif data == "menu_faq":
         await faq(update, context)
-    elif data == "menu_news":
-        await news(update, context)
     else:
-        await query.answer("Неизвестная команда.", show_alert=True)
+        await query.answer("Неизвестная команда", show_alert=True)
 
 # --- Запуск бота ---
 
 def main():
-    # Запускаем Flask в отдельном потоке (для keep-alive)
-    Thread(target=run_flask).start()
+    app = Application.builder().token(BOT_TOKEN).build()
 
-    application = Application.builder().token(BOT_TOKEN).build()
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
 
     logger.info("Бот запущен")
-    application.run_polling()
+    app.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
