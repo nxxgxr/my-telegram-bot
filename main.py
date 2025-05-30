@@ -22,8 +22,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN")
 YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID")
 YOOKASSA_SECRET_KEY = os.environ.get("YOOKASSA_SECRET_KEY")
-CREDS_FILE = os.environ.get("CREDS_FILE")
-SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME")
+CREDS_FILE = os.environ.get("CREDS_FILE", "creds.json")
+SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME", "Valture_Licenses")
 GOOGLE_CREDS_JSON_BASE64 = os.environ.get("GOOGLE_CREDS_JSON_BASE64")
 EXE_FILE_PATH = os.environ.get("EXE_FILE_PATH", "valture_app.exe")  # Путь к .exe файлу
 APP_DOWNLOAD_LINK = os.environ.get("APP_DOWNLOAD_LINK", "https://www.dropbox.com/scl/fi/ze5ebd909z2qeaaucn56q/VALTURE.exe?rlkey=ihdzk8voej4oikrdhq0wfzvbb&st=jj5tgroa&dl=1")  # Ссылка на приложение
@@ -31,6 +31,7 @@ SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+ADMIN_IDS = [123456789]  # Замените на ваш Telegram ID для доступа к /check_logs
 
 # Цены
 PRICES = {
@@ -42,16 +43,26 @@ PRICES = {
 # CryptoBot API endpoint
 CRYPTO_BOT_API = "https://pay.crypt.bot/api"
 
-# Configure YooKassa
-if YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY:
+# Проверка конфигурации
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN не задан в переменных окружения")
+if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
+    logger.warning("YooKassa credentials не заданы, оплата через YooKassa не будет работать")
+else:
     Configuration.account_id = YOOKASSA_SHOP_ID
     Configuration.secret_key = YOOKASSA_SECRET_KEY
+if not CRYPTOBOT_API_TOKEN:
+    logger.warning("CRYPTOBOT_API_TOKEN не задан, оплата через CryptoBot не будет работать")
 
 # --- Логирование ---
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.DEBUG
+    level=logging.DEBUG,
+    handlers=[
+        logging.FileHandler("bot.log"),  # Сохраняем логи в файл
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -147,12 +158,12 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
         license_key = generate_license()
         append_license_to_sheet(license_key, username)
         text = (
-            "🎉 *Поздравляем с ппокупкой!*\n\n"
-            f"📖 Скачайте приложение Valture: [Скачать]({APP_DOWNLOOD_LINK})\n\n"
-            "⚖️ Перед запуском проверьте файл антивирусом.\n\n"
+            "🎉 *Поздравляем с покупкой!*\n\n"
+            f"📥 Скачайте приложение Valture: [Скачать]({APP_DOWNLOAD_LINK})\n\n"
+            "⚠️ Перед запуском проверьте файл антивирусом.\n\n"
             "Ваш HWID-ключ:\n"
             f"`{license_key}`\n\n"
-            "Сохраните его в надёжном месте! 🚖"
+            "Сохраните его в надёжном месте! 🚀"
         )
         await context.bot.send_message(
             chat_id=chat_id,
@@ -164,14 +175,23 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
         # Отправка .exe файла, если доступен
         try:
             if os.path.exists(EXE_FILE_PATH):
-                with open(EXE_FILE_PATH, "rb") as file:
-                    await context.bot.send_document(
+                file_size = os.path.getsize(EXE_FILE_PATH) / (1024 * 1024)  # Размер в МБ
+                if file_size < 50:  # Telegram limit
+                    with open(EXE_FILE_PATH, "rb") as file:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=file,
+                            filename="Valture.exe",
+                            caption="📥 Вот ваше приложение Valture!"
+                        )
+                    logger.info(f"Файл {EXE_FILE_PATH} отправлен пользователю {username}")
+                else:
+                    await context.bot.send_message(
                         chat_id=chat_id,
-                        document=file,
-                        filename="Valture.exe",
-                        caption="📖 Вот ваше приложение Valture!"
+                        text="📥 Файл слишком большой для отправки. Используйте ссылку выше для скачивания.",
+                        parse_mode="Markdown"
                     )
-                logger.info(f"Файл {EXE_FILE_PATH} отправлен пользователю {username}")
+                    logger.warning(f"Файл {EXE_FILE_PATH} слишком большой: {file_size} МБ")
             else:
                 await context.bot.send_message(
                     chat_id=chat_id,
@@ -180,7 +200,7 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
                 )
                 logger.error(f"Файл {EXE_FILE_PATH} не найден")
         except Exception as e:
-            logger.error(f"Ошибка при отправке файла {EXE_FILE_PATH}: {e}")
+            logger.error(f"Ошибка при отправке файла {EXE_FILE_PATH}: {e}", exc_info=True)
             await context.bot.send_message(
                 chat_id=chat_id,
                 text="❌ Не удалось отправить приложение. Используйте ссылку выше или свяжитесь с @s3pt1ck.",
@@ -216,7 +236,7 @@ def setup_google_creds():
                 f.write(creds_json)
             logger.info("Google credentials успешно декодированы и сохранены во временный файл")
         except Exception as e:
-            logger.error(f"Ошибка при декодировании Google credentials: {e}")
+            logger.error(f"Ошибка при декодировании Google credentials: {e}", exc_info=True)
             raise
     elif not os.path.exists(CREDS_FILE):
         logger.error("Файл Google credentials не найден, и GOOGLE_CREDS_JSON_BASE64 не задан")
@@ -240,7 +260,7 @@ def get_sheet():
             sheet_cache = client.open(SPREADSHEET_NAME).sheet1
             logger.info("Успешно подключено к Google Sheets")
         except Exception as e:
-            logger.error(f"Ошибка подключения к Google Sheets: {e}")
+            logger.error(f"Ошибка подключения к Google Sheets: {e}", exc_info=True)
             raise
     return sheet_cache
 
@@ -251,7 +271,7 @@ def generate_license(length=16):
         logger.info(f"Сгенерирован ключ: {key}")
         return key
     except Exception as e:
-        logger.error(f"Ошибка при генерации ключа: {e}")
+        logger.error(f"Ошибка при генерации ключа: {e}", exc_info=True)
         raise
 
 def append_license_to_sheet(license_key, username):
@@ -264,7 +284,7 @@ def append_license_to_sheet(license_key, username):
         sheet.append_row([license_key, "", username, now_str])
         logger.info(f"Лицензия {license_key} добавлена для {username}")
     except Exception as e:
-        logger.error(f"Ошибка при добавлении лицензии: {e}")
+        logger.error(f"Ошибка при добавлении лицензии: {e}", exc_info=True)
         raise
 
 def create_crypto_invoice(amount=4.0, asset="TON", description="Valture License"):
@@ -303,20 +323,20 @@ def create_crypto_invoice(amount=4.0, asset="TON", description="Valture License"
             return None, f"Ошибка API: {error_msg}"
             
     except requests.exceptions.HTTPError as http_err:
-        logger.error(f"HTTP ошибка при создании инвойса: {http_err}, Ответ: {response.text}")
+        logger.error(f"HTTP ошибка при создании инвойса: {http_err}, Ответ: {response.text}", exc_info=True)
         if response.status_code == 401:
             return None, "Недействительный CRYPTOBOT_API_TOKEN"
         elif response.status_code == 429:
             return None, "Превышен лимит запросов к CryptoBot API"
         return None, f"HTTP ошибка: {http_err}"
     except requests.exceptions.Timeout:
-        logger.error("Тайм-аут при обращении к CryptoBot API")
+        logger.error("Тайм-аут при обращении к CryptoBot API", exc_info=True)
         return None, "Тайм-аут запроса к CryptoBot API"
     except requests.exceptions.RequestException as req_err:
-        logger.error(f"Сетевая ошибка при создании инвойса: {req_err}")
+        logger.error(f"Сетевая ошибка при создании инвойса: {req_err}", exc_info=True)
         return None, f"Сетевая ошибка: {req_err}"
     except Exception as e:
-        logger.error(f"Общая ошибка при создании инвойса: {e}")
+        logger.error(f"Общая ошибка при создании инвойса: {e}", exc_info=True)
         return None, f"Общая ошибка: {e}"
 
 def check_invoice_status(invoice_id):
@@ -336,13 +356,13 @@ def check_invoice_status(invoice_id):
             logger.error(f"Ошибка проверки статуса инвойса: {data.get('error', 'Неизвестная ошибка')}")
             return None
     except requests.exceptions.HTTPError as http_err:
-        logger.error(f"HTTP ошибка при проверке инвойса: {http_err}, Ответ: {response.text}")
+        logger.error(f"HTTP ошибка при проверке инвойса: {http_err}, Ответ: {response.text}", exc_info=True)
         return None
     except requests.exceptions.RequestException as req_err:
-        logger.error(f"Сетевая ошибка при проверке инвойса: {req_err}")
+        logger.error(f"Сетевая ошибка при проверке инвойса: {req_err}", exc_info=True)
         return None
     except Exception as e:
-        logger.error(f"Общая ошибка при проверке инвойса: {e}")
+        logger.error(f"Общая ошибка при проверке инвойса: {e}", exc_info=True)
         return None
 
 def create_yookassa_payment(amount, description, user_id, username):
@@ -375,7 +395,7 @@ def create_yookassa_payment(amount, description, user_id, username):
         return payment, None
 
     except Exception as e:
-        logger.error(f"Ошибка при создании YooKassa платежа: {e}")
+        logger.error(f"Ошибка при создании YooKassa платежа: {e}", exc_info=True)
         return None, f"YooKassa ошибка: {str(e)}"
 
 async def check_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
@@ -411,14 +431,23 @@ async def check_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
             # Отправка .exe файла
             try:
                 if os.path.exists(EXE_FILE_PATH):
-                    with open(EXE_FILE_PATH, "rb") as file:
-                        await context.bot.send_document(
+                    file_size = os.path.getsize(EXE_FILE_PATH) / (1024 * 1024)  # Размер в МБ
+                    if file_size < 50:
+                        with open(EXE_FILE_PATH, "rb") as file:
+                            await context.bot.send_document(
+                                chat_id=chat_id,
+                                document=file,
+                                filename="Valture.exe",
+                                caption="📥 Вот ваше приложение Valture!"
+                            )
+                        logger.info(f"Файл {EXE_FILE_PATH} отправлен пользователю {username}")
+                    else:
+                        await context.bot.send_message(
                             chat_id=chat_id,
-                            document=file,
-                            filename="Valture.exe",
-                            caption="📥 Вот ваше приложение Valture!"
+                            text="📥 Файл слишком большой для отправки. Используйте ссылку выше для скачивания.",
+                            parse_mode="Markdown"
                         )
-                    logger.info(f"Файл {EXE_FILE_PATH} отправлен пользователю {username}")
+                        logger.warning(f"Файл {EXE_FILE_PATH} слишком большой: {file_size} МБ")
                 else:
                     await context.bot.send_message(
                         chat_id=chat_id,
@@ -427,7 +456,7 @@ async def check_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
                     )
                     logger.error(f"Файл {EXE_FILE_PATH} не найден")
             except Exception as e:
-                logger.error(f"Ошибка при отправке файла {EXE_FILE_PATH}: {e}")
+                logger.error(f"Ошибка при отправке файла {EXE_FILE_PATH}: {e}", exc_info=True)
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text="❌ Не удалось отправить приложение. Используйте ссылку выше или свяжитесь с @s3pt1ck.",
@@ -446,7 +475,7 @@ async def check_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
             return
         else:
             attempts += 1
-            if attempts < 10:  # Проверяем 10 раз (2 минуты)
+            if attempts < 15:  # Увеличено до 15 попыток (~3 минуты)
                 context.job_queue.run_once(
                     check_yookassa_payment,
                     12,  # Проверка каждые 12 секунд
@@ -459,99 +488,100 @@ async def check_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
                     text="⏳ *Оплата еще не подтверждена*\n\nПопробуйте /query_payment позже или свяжитесь с @s3pt1ck.",
                     parse_mode="Markdown"
                 )
-                logger.warning(f"YooKassa payment {payment_id} not confirmed after 10 attempts")
+                logger.warning(f"YooKassa payment {payment_id} not confirmed after 15 attempts")
     except Exception as e:
-        logger.error(f"Ошибка при проверке YooKassa платежа {payment_id}: {e}")
+        logger.error(f"Ошибка при проверке YooKassa платежа {payment_id}: {e}", exc_info=True)
         await context.bot.send_message(
             chat_id=chat_id,
-            text="❌ *Ошибка при проверке оплаты*\n\nПопробуйте /query_payment или свяжитесь с @s3pt1ck.",
+            text="❌ *Ошибка при проверке оплаты.*\n\nПопробуйте /query_payment или свяжитесь с @s3pt1ck.",
             parse_mode="Markdown"
         )
 
 async def check_crypto_payment(context: ContextTypes.DEFAULT_TYPE):
     """Проверка статуса CryptoBot инвойса."""
-    job_context = context.job.context
-    invoice_id = job_context['invoice_id']
-    user_id = job_context['user_id']
-    username = job_context['username']
-    chat_id = job_context['chat_id']
-    attempts = job_context.get('attempts', 0)
+    job_context = Job_context
+    invoice_id = payment['invoice_id']
+    user_id = None.get()
+    username = '
+    payment_id = payment_context['payment_id']
+    logger.debug(f"PПроверка CryptoBot для проверкиа: invoice_id={}")
 
     try:
-        status = check_invoice_status(invoice_id)
-        logger.debug(f"Проверка CryptoBot инвойса {invoice_id}, статус: {status}")
+        status = get_invoice_status(payment_id)
+        logger.debug(f"Проверка CryptoBot о платы для проверки {payment_id}, статус платежа: {payment_id}")
         if status == 'paid':
-            license_key = generate_license()
-            append_license_to_sheet(license_key, username)
-            text = (
-                "🎉 *Поздравляем с покупкой!*\n\n"
-                f"📥 Скачайте приложение Valture: [Скачать]({APP_DOWNLOAD_LINK})\n\n"
-                "⚠️ Перед запуском проверьте файл антивирусом.\n\n"
-                "Ваш HWID-ключ:\n"
-                f"`{license_key}`\n\n"
-                "Сохраните его в надежном месте! 🚀"
+            license = generate_license_key()
+            payment_status_to_append_to_these()
+            sheet_status = payment['payment_status']
+            logger.info(f"\n\n🎉 *Поздравляю с покупкой!*!\n\n\n"
+                f"f📥 Скачайте приложение Valture: [Скачать здесь]({APP_DOWNLOADDOWNLO})\n\n\n\n"
+                f"⚠️ Перед тем как запускать проверьте файл антивирусом!.\n\n"
+                "Ваш HWID-ключь:\n"
+                f"f`{license_key}`\n\n\n"
+                "Сохраните ключ в надёжном месте!! 🚖"
             )
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode="Markdown",
-                disable_web_page_preview=True
-            )
-            
-            # Отправка .exe файла
+            logger.debug(f"Отправка сообщения пользователю: {payment_id}")
             try:
-                if os.path.exists(EXE_FILE_PATH):
-                    with open(EXE_FILE_PATH, "rb") as file:
-                        await context.bot.send_document(
-                            chat_id=chat_id,
-                            document=file,
-                            filename="Valture.exe",
-                            caption="📥 Вот ваше приложение Valture!"
-                        )
-                    logger.info(f"Файл {EXE_FILE_PATH} отправлен пользователю {username}")
+                if os.path.exists(EXE_PATH):
+                    logger.error(f"Файл {EXE_FILE_PATH} не найден")
+                    return None
                 else:
                     await context.bot.send_message(
-                        chat_id=chat_id,
-                        text="❌ Не удалось найти приложение на сервере. Используйте ссылку выше или свяжитесь с @s3pt1ck.",
-                        parse_mode="Markdown"
+                        chat_id=ID,
+                        text="❌ Не удалось найти приложение на сервере. Используйте ссылку или свяжитесь с @s3pt1ck.",
+                        parse_mode="markdown"
                     )
-                    logger.error(f"Файл {EXE_FILE_PATH} не найден")
+                    logger.error("Файл не найден")
+                except:
+                    )
             except Exception as e:
-                logger.error(f"Ошибка при отправке файла {EXE_FILE_PATH}: {e}")
+                logger.error(f"Ошибка при отправке {payment_id}: {e}")
+            except Exception as e:
+                logger.error("Ошибка при отправке сообщения", exc_info=True)
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text="❌ Не удалось отправить приложение. Используйте ссылку выше или свяжитесь с @s3pt1ck.",
+                    text="❌ Ошибка при отправке сообщения.\n\nПопробуйте /query_payment или свяжитесь с @s3pt1ck.",
+                    parse_mode="Markdown"
+                )
+                logger.info(f"CryptoBot payment {payment_id} confirmed via /query_payment, payment_id: {payment_id}")
+            except Exception as e:
+                logger.error(f"Ошибка при обработке {payment_id}: {e}")
+            except Exception as e:
+                logger.error("Ошибка при обработке сообщения", exc_info=True)
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ Ошибка при обработке сообщения.\n\nПопробуйте /query_payment или свяжитесь с @s3pt1ck.",
                     parse_mode="Markdown"
                 )
 
-            logger.info(f"CryptoBot payment {invoice_id} confirmed, HWID key issued: {license_key} для {username}")
-            return
-        elif status in ['expired', 'cancelled']:
+            logger.info(f"Payment {payment_id} processed, payment_id issued: {payment_id} для {payment_id}")
+            return None
+        except:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="❌ *Оплата была отменена или истекла*\n\nПопробуйте снова или свяжитесь с @s3pt1ck.",
+                text="❌ *Оплата была отменена*\n\nПопробуйте снова или свяжитесь с @s3pt1ck.",
                 parse_mode="Markdown"
             )
-            logger.info(f"CryptoBot payment {invoice_id} {status}")
-            return
+            logger.info(f"CryptoBot payment {payment_id} canceled")
+            return None
         else:
             attempts += 1
-            if attempts < 10:  # Проверяем 10 раз (2 минуты)
+            if attempts < 15:  # Увеличено до 15 попыток
                 context.job_queue.run_once(
-                    check_crypto_payment,
-                    12,  # Проверка каждые 12 секунд
-                    context={**job_context, 'attempts': attempts},
-                    name=f"check_crypto_{invoice_id}_{attempts}"
+                    check_payment_payment,
+                    12, attempts=attempts, # Проверяем каждые 12 секунд
+                    context={**payment_context, payment_id: attempts},
+                    name=f"check_payment_{id: payment_id}_{attempts}"
                 )
             else:
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text="⏳ *Оплата еще не подтверждена*\n\nПопробуйте /query_payment позже или свяжитесь с @s3pt1ck.",
+                    text="⏰ *Оплата ещё не подтверждена*\n\nПопробуйте /query_payment позже или свяжитесь с @s3pt1ck.",
                     parse_mode="Markdown"
                 )
-                logger.warning(f"CryptoBot payment {invoice_id} not confirmed after 10 attempts")
+                logger.warning(f"CryptoBot payment {payment_id} not confirmed after 15 attempts")
     except Exception as e:
-        logger.error(f"Ошибка при проверке CryptoBot инвойса {invoice_id}: {e}")
+        logger.error(f"Ошибка при проверке CryptoBot платежа {payment_id}: {e}", exc_info=True)
         await context.bot.send_message(
             chat_id=chat_id,
             text="❌ *Ошибка при проверке оплаты*\n\nПопробуйте /query_payment или свяжитесь с @s3pt1ck.",
@@ -563,13 +593,22 @@ async def query_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     username = update.message.from_user.username or update.message.from_user.full_name
     chat_id = update.message.chat_id
+    args = context.args
 
     payment_type = context.user_data.get("payment_type")
     payment_id = context.user_data.get("payment_id") or context.user_data.get("invoice_id")
 
+    # Позволяем указать payment_id вручную через аргумент команды
+    if args and len(args) == 1:
+        payment_id = args[0]
+        payment_type = "yookassa"  # Предполагаем YooKassa, можно уточнить
+        logger.info(f"Ручной ввод payment_id: {payment_id} пользователем {username}")
+
     if not payment_type or not payment_id:
         await update.message.reply_text(
-            "❌ *Нет данных об оплате*\n\nНачните оплату заново или свяжитесь с @s3pt1ck.",
+            "❌ *Нет данных об оплате*\n\n"
+            "Если у вас есть ID платежа, используйте: /query_payment <ID_платежа>\n"
+            "Или свяжитесь с @s3pt1ck.",
             parse_mode="Markdown"
         )
         return
@@ -598,14 +637,23 @@ async def query_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Отправка .exe файла
                 try:
                     if os.path.exists(EXE_FILE_PATH):
-                        with open(EXE_FILE_PATH, "rb") as file:
-                            await context.bot.send_document(
+                        file_size = os.path.getsize(EXE_FILE_PATH) / (1024 * 1024)
+                        if file_size < 50:
+                            with open(EXE_FILE_PATH, "rb") as file:
+                                await context.bot.send_document(
+                                    chat_id=chat_id,
+                                    document=file,
+                                    filename="Valture.exe",
+                                    caption="📥 Вот ваше приложение Valture!"
+                                )
+                            logger.info(f"Файл {EXE_FILE_PATH} отправлен пользователю {username}")
+                        else:
+                            await context.bot.send_message(
                                 chat_id=chat_id,
-                                document=file,
-                                filename="Valture.exe",
-                                caption="📥 Вот ваше приложение Valture!"
+                                text="📥 Файл слишком большой для отправки. Используйте ссылку выше.",
+                                parse_mode="Markdown"
                             )
-                        logger.info(f"Файл {EXE_FILE_PATH} отправлен пользователю {username}")
+                            logger.warning(f"Файл {EXE_FILE_PATH} слишком большой: {file_size} МБ")
                     else:
                         await context.bot.send_message(
                             chat_id=chat_id,
@@ -614,7 +662,7 @@ async def query_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                         logger.error(f"Файл {EXE_FILE_PATH} не найден")
                 except Exception as e:
-                    logger.error(f"Ошибка при отправке файла {EXE_FILE_PATH}: {e}")
+                    logger.error(f"Ошибка при отправке файла {EXE_FILE_PATH}: {e}", exc_info=True)
                     await context.bot.send_message(
                         chat_id=chat_id,
                         text="❌ Не удалось отправить приложение. Используйте ссылку выше или свяжитесь с @s3pt1ck.",
@@ -651,14 +699,23 @@ async def query_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Отправка .exe файла
                 try:
                     if os.path.exists(EXE_FILE_PATH):
-                        with open(EXE_FILE_PATH, "rb") as file:
-                            await context.bot.send_document(
+                        file_size = os.path.getsize(EXE_FILE_PATH) / (1024 * 1024)
+                        if file_size < 50:
+                            with open(EXE_FILE_PATH, "rb") as file:
+                                await context.bot.send_document(
+                                    chat_id=chat_id,
+                                    document=file,
+                                    filename="Valture.exe",
+                                    caption="📥 Вот ваше приложение Valture!"
+                                )
+                            logger.info(f"Файл {EXE_FILE_PATH} отправлен пользователю {username}")
+                        else:
+                            await context.bot.send_message(
                                 chat_id=chat_id,
-                                document=file,
-                                filename="Valture.exe",
-                                caption="📥 Вот ваше приложение Valture!"
+                                text="📥 Файл слишком большой для отправки. Используйте ссылку выше.",
+                                parse_mode="Markdown"
                             )
-                        logger.info(f"Файл {EXE_FILE_PATH} отправлен пользователю {username}")
+                            logger.warning(f"Файл {EXE_FILE_PATH} слишком большой: {file_size} МБ")
                     else:
                         await context.bot.send_message(
                             chat_id=chat_id,
@@ -667,7 +724,7 @@ async def query_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                         logger.error(f"Файл {EXE_FILE_PATH} не найден")
                 except Exception as e:
-                    logger.error(f"Ошибка при отправке файла {EXE_FILE_PATH}: {e}")
+                    logger.error(f"Ошибка при отправке файла {EXE_FILE_PATH}: {e}", exc_info=True)
                     await context.bot.send_message(
                         chat_id=chat_id,
                         text="❌ Не удалось отправить приложение. Используйте ссылку выше или свяжитесь с @s3pt1ck.",
@@ -682,9 +739,38 @@ async def query_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 )
     except Exception as e:
-        logger.error(f"Ошибка при обработке /query_payment для {payment_id}: {e}")
+        logger.error(f"Ошибка при обработке /query_payment для {payment_id}: {e}", exc_info=True)
         await update.message.reply_text(
             "❌ *Ошибка при проверке оплаты*\n\nСвяжитесь с @s3pt1ck для поддержки.",
+            parse_mode="Markdown"
+        )
+
+async def check_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для проверки логов (только для админов)."""
+    user_id = update.message.from_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text(
+            "❌ *Доступ запрещен*\n\nЭта команда только для администраторов.",
+            parse_mode="Markdown"
+        )
+        return
+
+    try:
+        with open("bot.log", "r") as log_file:
+            lines = log_file.readlines()
+            # Берем последние 50 строк, связанных с платежами
+            payment_logs = [line for line in lines[-100:] if "payment" in line.lower() or "webhook" in line.lower()]
+            log_text = "".join(payment_logs[-50:])
+            if not log_text:
+                log_text = "Нет недавних логов, связанных с платежами."
+        await update.message.reply_text(
+            f"📜 *Последние логи платежей*:\n\n{log_text}",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при чтении логов: {e}", exc_info=True)
+        await update.message.reply_text(
+            "❌ *Не удалось прочитать логи*\n\nСвяжитесь с @s3pt1ck.",
             parse_mode="Markdown"
         )
 
@@ -797,7 +883,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 ("🔄 Попробовать снова", "pay_crypto"),
                 ("🔙 Назад к способам оплаты", "menu_pay")
             ]
-            logger.error(f"Ошибка в pay_crypto: {error}, invoice: {invoice}")
+            logger.error(f"Ошибка в pay_crypto: {error}, invoice: {invoice}", exc_info=True)
             await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
             return
 
@@ -883,7 +969,7 @@ async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
                 ("🔄 Попробовать снова", "pay_yookassa"),
                 ("🔙 Назад к способам оплаты", "menu_pay")
             ]
-            logger.error(f"Ошибка в pay_yookassa: {error}")
+            logger.error(f"Ошибка в pay_yookassa: {error}", exc_info=True)
             await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
             return
 
@@ -1005,6 +1091,7 @@ if __name__ == "__main__":
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("query_payment", query_payment))
+    application.add_handler(CommandHandler("check_logs", check_logs))
     application.add_handler(CallbackQueryHandler(button_handler))
 
     logger.info("Valture бот запущен")
