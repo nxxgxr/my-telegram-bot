@@ -16,6 +16,14 @@ import gspread
 from google.oauth2.service_account import Credentials
 from yookassa import Configuration, Payment
 
+# --- Конфигурация (цены и ссылка на приложение) ---
+
+PRICES = {
+    "crypto": {"amount": 4.0, "currency": "TON", "approx_usd": 12.7},
+    "yookassa": {"amount": 1000.0, "currency": "RUB", "approx_usd": 12.7}
+}
+APP_DOWNLOAD_LINK = "https://www.dropbox.com/scl/fi/ze5ebd909z2qeaaucn56q/VALTURE.exe?rlkey=ihdzk8voej4oikrdhq0wfzvbb&st=jj5tgroa&dl=1"
+
 # --- Настройки ---
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -29,9 +37,6 @@ SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
-APP_DOWNLOAD_LINK = "https://www.dropbox.com/scl/fi/ze5ebd909z2qeaaucn56q/VALTURE.exe?rlkey=ihdzk8voej4oikrdhq0wfzvbb&st=jj5tgroa&dl=1"
-
-# CryptoBot API endpoint
 CRYPTO_BOT_API = "https://pay.crypt.bot/api"
 
 # Configure YooKassa
@@ -89,7 +94,6 @@ def yookassa_webhook():
                 logger.error(f"Missing metadata in webhook: user_id={user_id}, username={username}")
                 return jsonify({"status": "error", "message": "Missing metadata"}), 400
 
-            # Store payment confirmation for async processing
             from application import application
             job_queue = application.job_queue
             job_queue.run_once(
@@ -126,7 +130,7 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
 
     try:
         license_key = generate_license()
-        append_license_to_sheet(license_key, username)
+        append_license_to_sheet(license_key, username, payment_id, "yookassa")
         text = (
             "🎉 *Поздравляем с покупкой!*\n\n"
             "Ваш лицензионный ключ (HWID):\n"
@@ -141,7 +145,7 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             disable_web_page_preview=True
         )
-        logger.info(f"YooKassa payment processed, key issued: {license_key} for {username}")
+        logger.info(f"YooKassa payment processed, key issued: {license_key} for {username}, payment_id={payment_id}")
     except Exception as e:
         logger.error(f"Error processing YooKassa payment {payment_id}: {e}", exc_info=True)
         error_text = (
@@ -207,33 +211,56 @@ def generate_license(length=32):
         logger.error(f"Ошибка при генерации ключа: {e}")
         raise
 
-def append_license_to_sheet(license_key, username):
+def append_license_to_sheet(license_key, username, payment_id, payment_type):
     """Добавление лицензии в Google Sheets."""
     try:
         sheet = get_sheet()
         utc_plus_2 = timezone(timedelta(hours=2))
         now_utc_plus_2 = datetime.now(utc_plus_2)
         now_str = now_utc_plus_2.strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([license_key, "", username, now_str])
-        logger.info(f"Лицензия {license_key} добавлена для {username}")
+        sheet.append_row([license_key, username, payment_id, payment_type, now_str])
+        logger.info(f"Лицензия {license_key} добавлена для {username}, payment_id={payment_id}, type={payment_type}")
     except Exception as e:
         logger.error(f"Ошибка при добавлении лицензии: {e}")
         raise
 
 def check_license_key(license_key):
-    """Проверка лицензионного ключа в Google Sheets."""
+    """Проверка лицензионного ключа в Google Sheets и платежной системы."""
     try:
         sheet = get_sheet()
         records = sheet.get_all_records()
         for record in records:
             if record.get('License Key') == license_key:
-                logger.info(f"Лицензия найдена: {license_key} для {record.get('Username')}")
-                return True, record.get('Username')
+                payment_id = record.get('Payment ID')
+                payment_type = record.get('Payment Type')
+                username = record.get('Username')
+                
+                # Проверяем статус платежа
+                if payment_type == "yookassa":
+                    try:
+                        payment = Payment.find_one(payment_id)
+                        if payment.status == "succeeded":
+                            logger.info(f"Лицензия подтверждена через YooKassa: {license_key}, payment_id={payment_id}")
+                            return True, username, payment_id, payment_type
+                        else:
+                            logger.warning(f"Платеж YooKassa не подтвержден: {payment_id}, status={payment.status}")
+                            return False, None, None, None
+                    except Exception as e:
+                        logger.error(f"Ошибка проверки YooKassa платежа {payment_id}: {e}")
+                        return False, None, None, None
+                elif payment_type == "crypto":
+                    status = check_invoice_status(payment_id)
+                    if status == "paid":
+                        logger.info(f"Лицензия подтверждена через CryptoBot: {license_key}, invoice_id={payment_id}")
+                        return True, username, payment_id, payment_type
+                    else:
+                        logger.warning(f"Платеж CryptoBot не подтвержден: {payment_id}, status={status}")
+                        return False, None, None, None
         logger.warning(f"Лицензия не найдена: {license_key}")
-        return False, None
+        return False, None, None, None
     except Exception as e:
         logger.error(f"Ошибка при проверке лицензии: {e}")
-        return False, None
+        return False, None, None, None
 
 # --- Платежная логика ---
 
@@ -409,9 +436,9 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     text = (
         "💳 *Покупка лицензии Valture*\n\n"
-        "💰 *Цены:*\n"
-        "- *4 TON* (~$12.7)\n"
-        "- *1000 RUB* (~$12.7)\n\n"
+        f"💰 *Цены:*\n"
+        f"- *{PRICES['crypto']['amount']} {PRICES['crypto']['currency']}* (~${PRICES['crypto']['approx_usd']})\n"
+        f"- *{PRICES['yookassa']['amount']} {PRICES['yookassa']['currency']}* (~${PRICES['yookassa']['approx_usd']})\n\n"
         "Выберите способ оплаты или проверьте лицензию:\n"
         "- *CryptoBot*: Оплата через криптовалюту.\n"
         "- *YooKassa*: Оплата картой.\n\n"
@@ -431,7 +458,7 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     text = (
         "💸 *Подтверждение оплаты CryptoBot*\n\n"
-        "Вы собираетесь оплатить *4 TON* за лицензию Valture.\n"
+        f"Вы собираетесь оплатить *{PRICES['crypto']['amount']} {PRICES['crypto']['currency']}* за лицензию Valture.\n"
         "Продолжить оплату?"
     )
     buttons = [
@@ -449,7 +476,11 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     try:
         logger.debug(f"Создание CryptoBot инвойса для пользователя: {username} (ID: {user_id})")
-        invoice, error = create_crypto_invoice(amount=4.0, asset="TON", description="Valture License")
+        invoice, error = create_crypto_invoice(
+            amount=PRICES['crypto']['amount'],
+            asset=PRICES['crypto']['currency'],
+            description="Valture License"
+        )
         if not invoice:
             error_msg = (
                 "❌ *Ой, что-то пошло не так!*\n\n"
@@ -475,7 +506,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         text = (
             "💸 *Оплатите через CryptoBot*\n\n"
-            "Нажмите ниже для оплаты *4 TON*:\n"
+            f"Нажмите ниже для оплаты *{PRICES['crypto']['amount']} {PRICES['crypto']['currency']}*:\n"
             f"[Оплатить через CryptoBot]({pay_url})\n\n"
             "Ключ и ссылка на приложение будут отправлены автоматически после оплаты.\n"
             "Вы также можете проверить статус вручную."
@@ -489,7 +520,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Запускаем автоматическую проверку оплаты
         context.job_queue.run_repeating(
             check_crypto_payment,
-            interval=10,  # Проверять каждые 10 секунд
+            interval=10,
             first=10,
             context={
                 'invoice_id': invoice_id,
@@ -523,7 +554,7 @@ async def check_crypto_payment(context: ContextTypes.DEFAULT_TYPE):
         status = check_invoice_status(invoice_id)
         if status == "paid":
             license_key = generate_license()
-            append_license_to_sheet(license_key, username)
+            append_license_to_sheet(license_key, username, invoice_id, "crypto")
             text = (
                 "🎉 *Поздравляем с покупкой!*\n\n"
                 "Ваш лицензионный ключ (HWID):\n"
@@ -540,8 +571,7 @@ async def check_crypto_payment(context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_keyboard(buttons),
                 disable_web_page_preview=True
             )
-            logger.info(f"CryptoBot оплата подтверждена, ключ выдан: {license_key} для {username}")
-            # Удаляем задачу после успешной оплаты
+            logger.info(f"CryptoBot оплата подтверждена, ключ выдан: {license_key} для {username}, invoice_id={invoice_id}")
             context.job.schedule_removal()
             context.user_data.clear()
         elif status in ["expired", "cancelled"]:
@@ -562,7 +592,6 @@ async def check_crypto_payment(context: ContextTypes.DEFAULT_TYPE):
             )
             context.job.schedule_removal()
             context.user_data.clear()
-        # Продолжаем проверку, если статус "pending" или None
     except Exception as e:
         logger.error(f"Ошибка при проверке CryptoBot оплаты: {e}")
         text = (
@@ -587,7 +616,7 @@ async def pay_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     text = (
         "💳 *Подтверждение оплаты YooKassa*\n\n"
-        "Вы собираетесь оплатить *1000 RUB* за лицензию Valture.\n"
+        f"Вы собираетесь оплатить *{PRICES['yookassa']['amount']} {PRICES['yookassa']['currency']}* за лицензию Valture.\n"
         "Продолжить оплату?"
     )
     buttons = [
@@ -606,7 +635,7 @@ async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         logger.debug(f"Создание YooKassa платежа для пользователя: {username} (ID: {user_id})")
         payment, error = create_yookassa_payment(
-            amount=1000.0,
+            amount=PRICES['yookassa']['amount'],
             description="Valture License",
             user_id=user_id,
             username=username
@@ -635,7 +664,7 @@ async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
 
         text = (
             "💳 *Оплатите через YooKassa*\n\n"
-            "Нажмите ниже для оплаты *1000 RUB*:\n"
+            f"Нажмите ниже для оплаты *{PRICES['yookassa']['amount']} {PRICES['yookassa']['currency']}*:\n"
             f"[Оплатить через YooKassa]({confirmation_url})\n\n"
             "Ключ и ссылка на приложение будут отправлены автоматически после оплаты.\n"
             "Вы также можете проверить статус вручную."
@@ -678,17 +707,18 @@ async def handle_license_key(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["awaiting_license_key"] = False
 
     try:
-        is_valid, username = check_license_key(license_key)
+        is_valid, username, payment_id, payment_type = check_license_key(license_key)
         if is_valid:
             text = (
                 "✅ *Лицензия действительна!*\n\n"
                 f"Ключ: `{license_key}`\n"
-                f"Принадлежит: @{username}\n\n"
+                f"Принадлежит: @{username}\n"
+                f"Метод оплаты: {payment_type.capitalize()}\n\n"
                 "Скачайте приложение, если еще не скачали:\n"
                 f"[VALTURE.exe]({APP_DOWNLOAD_LINK})"
             )
             buttons = [("🏠 Назад в главное меню", "menu_main")]
-            logger.info(f"Лицензия подтверждена: {license_key} для {username}")
+            logger.info(f"Лицензия подтверждена: {license_key} для {username}, payment_id={payment_id}, type={payment_type}")
         else:
             text = (
                 "❌ *Ключ недействителен!*\n\n"
