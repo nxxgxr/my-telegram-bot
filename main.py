@@ -4,67 +4,69 @@ import secrets
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from yookassa import Configuration, Payment
+from flask import Flask
+import asyncio
 
-# Настройка логирования
+# Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Конфигурация YooKassa
-Configuration.account_id = os.getenv('YOOKASSA_SHOP_ID', 'your_shop_id')
-Configuration.secret_key = os.getenv('YOOKASSA_SECRET_KEY', 'your_secret_key')
+# YooKassa configuration
+Configuration.account_id = os.getenv('YOOKASSA_SHOP_ID')
+Configuration.secret_key = os.getenv('YOOKASSA_SECRET_KEY')
 
-# Клавиатура
+# Flask app for Railway health checks
+app = Flask(__name__)
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+# Telegram Bot
 def get_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 Купить лицензию", callback_data="buy_license")],
+        [InlineKeyboardButton("💳 Купить лицензию (1000₽)", callback_data="buy_license")],
         [InlineKeyboardButton("🆘 Поддержка", url="https://t.me/valture_support")]
     ])
 
-# Обработчики команд
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
         f"👋 Привет, {user.first_name}!\n\n"
-        "Добро пожаловать в Valture!\n"
         "Для покупки лицензии нажмите кнопку ниже:",
         reply_markup=get_keyboard()
     )
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "buy_license":
-        await create_payment(query)
-
 async def create_payment(query):
     try:
         user = query.from_user
-        payment = Payment.create({
-            "amount": {
-                "value": "1000.00",
-                "currency": "RUB"
-            },
+        payment_params = {
+            "amount": {"value": "1000.00", "currency": "RUB"},
             "confirmation": {
                 "type": "redirect",
-                "return_url": "https://t.me/valture_bot"
+                "return_url": f"https://t.me/{(await query.bot.get_me()).username}"
             },
-            "capture": True,
             "description": "Лицензия Valture",
             "metadata": {
                 "user_id": user.id,
                 "username": user.username or user.first_name
             }
-        }, idempotence_key=secrets.token_hex(16))
+        }
         
+        # Debug logging
+        logger.info(f"Creating payment for user {user.id}")
+        logger.debug(f"Payment params: {payment_params}")
+        
+        payment = Payment.create(payment_params, idempotence_key=secrets.token_hex(16))
         pay_url = payment.confirmation.confirmation_url
         
+        logger.info(f"Payment created successfully: {pay_url}")
+        
         await query.edit_message_text(
-            text=f"🛒 Ссылка для оплаты:\n\n{pay_url}\n\n"
-                 "После оплаты вы получите лицензионный ключ автоматически.",
+            text=f"✅ Ссылка для оплаты:\n\n{pay_url}\n\n"
+                 "После оплаты лицензия придёт автоматически в этот чат.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔗 Перейти к оплате", url=pay_url)],
                 [InlineKeyboardButton("🔄 Проверить оплату", callback_data="check_payment")]
@@ -73,21 +75,54 @@ async def create_payment(query):
         )
         
     except Exception as e:
-        logger.error(f"Ошибка при создании платежа: {str(e)}")
+        logger.error(f"Payment creation failed: {str(e)}", exc_info=True)
         await query.edit_message_text(
-            "❌ Произошла ошибка при создании платежа.\n"
-            "Попробуйте позже или обратитесь в поддержку."
+            "❌ Ошибка при создании платежа:\n\n"
+            f"Техническая информация: {str(e)}\n\n"
+            "Попробуйте ещё раз или обратитесь в поддержку: @valture_support",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🆘 Поддержка", url="https://t.me/valture_support")]
+            )
         )
 
-# Запуск бота
-def main():
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "buy_license":
+        await create_payment(query)
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+async def run_bot():
+    # Check required environment variables
+    required_vars = ['BOT_TOKEN', 'YOOKASSA_SHOP_ID', 'YOOKASSA_SECRET_KEY']
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    
+    if missing_vars:
+        logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        return
+    
     application = Application.builder().token(os.getenv('BOT_TOKEN')).build()
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(handle_callback))
     
-    logger.info("Бот запущен")
-    application.run_polling()
+    await application.initialize()
+    await application.start()
+    logger.info("Bot started successfully")
+    
+    # Keep the bot running
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    main()
+    # Start Flask in a separate thread
+    import threading
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Run the bot
+    asyncio.run(run_bot())
