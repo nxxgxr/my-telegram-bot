@@ -177,12 +177,12 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             },
             "confirmation": {
                 "type": "redirect",
-                "return_url": "https://t.me/valture_support_bot"
+                "return_url": "https://t.me/valture_support_bot"  # ссылка возврата после оплаты
             },
             "capture": True,
             "description": "Покупка лицензии Valture",
             "metadata": {"username": username}
-        }, uuid=secrets.token_hex(16))
+        }, idempotence_key=secrets.token_hex(16))  # передаем idempotence_key для уникальности
 
         pay_url = payment.confirmation.confirmation_url
         logger.info(f"Платеж создан, ссылка: {pay_url}")
