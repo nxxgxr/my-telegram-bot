@@ -751,7 +751,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Выберите опцию ниже, чтобы начать:"
     )
     buttons = [("🏠 Главное меню", "menu_main")]
-    await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+    await update.message.reply_text(welcome_text, parse_mode="markdown", reply_markup=get_keyboard(buttons))
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -759,7 +759,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = [
         ("ℹ️ О Valture", "menu_about"),
         ("📰 Новости", "menu_news"),
-        ("💳 Купить лицензию", "menu_pay"),
+        ("💳 Купить", "menu_pay"),
         ("❓ FAQ", "menu_faq"),
         ("📞 Поддержка", "menu_support"),
     ]
@@ -773,25 +773,25 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "✨ *Valture — Ваш путь к совершенству в играх*\n\n"
+        "✨ *Valture — Ваш путь к совершенству в играх!*\n\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "Valture — это передовой инструмент, созданный для геймеров, которые не готовы мириться с компромиссами. "
         "Наша миссия — вывести вашу игровую производительность на новый уровень, обеспечив максимальную плавность, "
         "стабильность и отзывчивость системы. С Valture вы получите конкурентное преимущество, о котором всегда мечтали.\n\n"
-        "🔥 *Почему выбирают Valture?*\n"
-        "🚀 Увеличение FPS на 20–30%: Оптимизируйте производительность вашей системы, чтобы добиться максимальной частоты кадров.\n"
-        "🛡️ Стабильный фреймрейт: Забудьте о лагах и просадках FPS — Valture обеспечивает плавный игровой процесс.\n"
-        "💡 Молниеносная отзывчивость: Сократите время отклика системы, чтобы каждый ваш клик или движение были мгновенными.\n"
+        "🔥 *Почему выбирают Valture?*\n\n"
+        "🚖 Увеличение FPS на 20–30%: Оптимизируйте производительность вашей системы, чтобы добиться максимальной частоты кадров.\n"
+        "🛡 Стабильный фреймрейт: Забудьте о лагах и просадках FPS — Valture обеспечивает плавный игровой процесс.\n"
+        "💡 *Молниеносная реакция: Сократите время отклика системы, чтобы каждый ваш клик или движение были мгновенными.\n"
         "🔋 Оптимизация Windows: Полная настройка операционной системы для максимальной производительности в играх.\n"
-        "🛳️ Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
-        "🖥️ Плавность картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
+        "🖐 Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
+        "🖥️ Плавление картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "_Создано для геймеров, которые ценят качество и стремятся к победе._"
     )
     buttons = [("🔙 Назад в главное меню", "menu_main")]
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+    await query.edit_message_text(text, parse_mode="markdown", reply_markup=get_keyboard(buttons))
 
-async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def pay(update: Update, context: contextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
@@ -813,7 +813,7 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "💸 *Подтверждение оплаты CryptoBot*\n\n"
+        "💸 *Подтверждение оплаты через CryptoBot*\n\n"
         f"Вы собираетесь оплатить *{PRICES['crypto_ton']} TON* за лицензию Valture.\n"
         "На странице оплаты вы сможете выбрать любую криптовалюту.\n"
         "Продолжить оплату?"
@@ -835,15 +835,15 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
         invoice, error = create_crypto_invoice(amount=PRICES['crypto_ton'], asset="TON", description="Valture License")
         if not invoice or "pay_url" not in invoice:
             error_msg = (
-                "❌ *Ой, что-то пошло не так!*n\n"
+                "❌ *Ой, что-то пошло не так!*\n\n"
                 f"Не удалось создать инвойс: {error or 'Неизвестная ошибка'}.\n"
-                "Попробуйте снова или свяжись с @s3pt1ck."
+                "Попробуйте снова или свяжитесь с @s3pt1ck."
             )
             buttons = [
                 ("🔄 Попробовать снова", "pay_crypto"),
-                ("🔙 Назад к способакам оплаты", "menu_pay")
+                ("🔙 Назад к способам оплаты", "menu_pay")
             ]
-            logger.error(f"Ошибка в pay_crypto: {error}, invoice: {invoice}", exc_info=True)
+            logger.error(f"Ошибка в pay_crypto: {error}, invoice: {invoice}")
             await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
             return
 
@@ -857,12 +857,12 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         text = (
             f"💸 *Оплатите через CryptoBot*\n\n"
-            f"Нажмите ниже для оплаты *{PRICES['crypto_ton']} TON* (или эквивалент в другой криптовалюте):\n\n"
+            f"Нажмите ниже для оплаты *{PRICES['crypto_ton']} TON* (или эквивалент в другой валюте):\n"
             f"[Оплатить через CryptoBot]({pay_url})\n\n"
             "Ключ и приложение будут отправлены автоматически после оплаты."
         )
         buttons = [("🔙 Назад к способам оплаты", "menu_pay")]
-        await query.edit_message_text(text, parse_mode="markdown", reply_markup=buttons, disable_web_page_preview=True)
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
 
         context.job_queue.run_once(
             check_crypto_payment,
@@ -877,22 +877,22 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
             name=f"check_crypto_{invoice_id}_1"
         )
     except Exception as e:
-        logger.error(f"Критическая ошибка в pay_crypto_confirm: {e}", exc_info=True)
+        logger.error(f"Критическая ошибка в pay_crypto_confirm: {e}")
         error_msg = (
             "❌ *Что-то сломалось!*\n\n"
-            "Не удалось обработать запрос. Попробуйте снова или свяжитесь с @s3pt1."
+            "Не удалось обработать запрос. Попробуйте снова или свяжитесь с @s3pt1ck."
         )
         buttons = [
             ("🔄 Попробовать снова", "pay_crypto"),
             ("🔙 Назад к способам оплаты", "menu_pay")
         ]
-        await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=buttons)
+        await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "💳 *Подтверждение оплаты YooKassa*\n\n"
+        "💳 *Подтверждение оплаты через YooKassa*\n\n"
         f"Вы собираетесь оплатить *{PRICES['yookassa_rub']} RUB* за лицензию Valture.\n"
         "Продолжить оплату?"
     )
@@ -900,9 +900,9 @@ async def pay_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ("✅ Подтвердить оплату", "pay_yookassa_confirm"),
         ("🔙 Назад к способам оплаты", "menu_pay")
     ]
-    await query.edit_message_text(text, parse_mode="markdown", reply_markup=buttons)
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def pay_yookassa_confirm(update: Update.INFO, context: ContextTypes.DEFAULT_TYPE):
+async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
@@ -926,12 +926,12 @@ async def pay_yookassa_confirm(update: Update.INFO, context: ContextTypes.DEFAUL
                 ("🔄 Попробовать снова", "pay_yookassa"),
                 ("🔙 Назад к способам оплаты", "menu_pay")
             ]
-            logger.error(f"Ошибка в pay_yookassa: {error}", exc_info=True)
-            await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=buttons)
+            logger.error(f"Ошибка в pay_yookassa: {error}")
+            await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
             return
 
         payment_id = payment.id
-        confirmation_url = payment.confirmation.confirmation.confirmation_url
+        confirmation_url = payment.confirmation.confirmation_url
 
         context.user_data["payment_type"] = "yookassa"
         context.user_data["payment_id"] = payment_id
@@ -960,7 +960,7 @@ async def pay_yookassa_confirm(update: Update.INFO, context: ContextTypes.DEFAUL
             name=f"check_yookassa_{payment_id}_1"
         )
     except Exception as e:
-        logger.error(f"Критическая ошибка в pay_yookassa_confirm: {e}", exc_info=True)
+        logger.error(f"Критическая ошибка в pay_yookassa_confirm: {e}")
         error_msg = (
             "❌ *Что-то сломалось!*\n\n"
             "Не удалось обработать запрос. Попробуйте снова или свяжитесь с @s3pt1ck."
@@ -1004,7 +1004,7 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📰 *Новости Valture*\n\n"
         "Следите за обновлениями!\n"
-        "Пока новых объявлений нет. 📅"
+        "Пока новостей нет. 📅"
     )
     buttons = [("🔙 Назад в главное меню", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -1045,8 +1045,8 @@ if __name__ == "__main__":
         application.add_handler(CommandHandler("check_logs", check_logs))
         application.add_handler(CallbackQueryHandler(button_handler))
 
-        logger.info("Valture бот успешно запущен")
+        logger.info("Application started successfully")
         application.run_polling()
     except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {e}", exc_info=True)
+        logger.error(f"Failed to start application: {e}")
         raise
