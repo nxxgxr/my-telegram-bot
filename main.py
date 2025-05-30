@@ -70,27 +70,28 @@ def yookassa_webhook():
     logger.info(f"Событие от YooKassa: {event}")
 
     if event == 'payment.succeeded':
-        payment_obj = data.get('object', {}).get('payment', {})
+        payment_obj = data.get('object', {})  # Убрали .get('payment'), так как объект уже в корне
         username = payment_obj.get('metadata', {}).get('username')
-        if username:
+        chat_id = payment_obj.get('metadata', {}).get('chat_id')
+        if username and chat_id:
             try:
                 license_key = generate_license()
                 append_license_to_sheet(license_key, username)
                 bot = Bot(token=BOT_TOKEN)
                 bot.send_message(
-                    chat_id=payment_obj.get('metadata', {}).get('chat_id'),
+                    chat_id=chat_id,
                     text=(
                         f"🎉 Спасибо за покупку!\n\n"
-                        f"Ваш лицензионный ключ:\n`{license_key}`\n\n"
+                        f"Ваш HWID ключ:\n`{license_key}`\n\n"
                         "Сохраните его в надежном месте."
                     ),
                     parse_mode="Markdown"
                 )
-                logger.info(f"Отправлена лицензия пользователю {username}")
+                logger.info(f"Отправлен HWID ключ пользователю {username}")
             except Exception as e:
-                logger.error(f"Ошибка отправки лицензии: {e}")
+                logger.error(f"Ошибка отправки ключа: {e}")
         else:
-            logger.warning("В webhook нет username в metadata")
+            logger.warning("В webhook отсутствуют username или chat_id в metadata")
 
     return '', 200
 
@@ -111,7 +112,7 @@ def get_sheet():
 
 def generate_license(length=32):
     key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
-    logger.info(f"Сгенерирован ключ: {key}")
+    logger.info(f"Сгенерирован HWID ключ: {key}")
     return key
 
 def append_license_to_sheet(license_key, username):
@@ -119,7 +120,7 @@ def append_license_to_sheet(license_key, username):
     tz = timezone(timedelta(hours=3))  # Москва +3 часа
     now_str = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
     sheet.append_row([license_key, "", username, now_str])
-    logger.info(f"Добавлена лицензия {license_key} для {username}")
+    logger.info(f"Добавлен HWID ключ {license_key} для {username}")
 
 # --- Телеграм меню и клавиатуры ---
 def get_keyboard(buttons):
@@ -157,7 +158,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     text = (
         "Стоимость лицензии — 1000 рублей.\n"
-        "После оплаты вы получите ключ в этом чате.\n\n"
+        "После оплаты вы получите HWID ключ в этом чате.\n\n"
         "Готовы продолжить?"
     )
     await query.edit_message_text(text, reply_markup=get_keyboard([("✅ Оплатить", "pay_confirm"), ("🔙 Назад", "menu_main")]))
@@ -173,14 +174,15 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         logger.info(f"Создаем платеж для {username} на сумму {amount_value}")
 
-        payment = Payment.create({
+        # Формируем параметры платежа
+        payment_params = {
             "amount": {
                 "value": amount_value,
                 "currency": "RUB"
             },
             "confirmation": {
                 "type": "redirect",
-                "return_url": "https://t.me/valture_support_bot"  # Ссылка возврата после оплаты
+                "return_url": "https://t.me/valture_support_bot"
             },
             "capture": True,
             "description": "Покупка лицензии Valture",
@@ -188,18 +190,24 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "username": username,
                 "chat_id": str(chat_id)
             }
-        }, idempotence_key=secrets.token_hex(16))
+        }
+        logger.debug(f"Параметры платежа: {json.dumps(payment_params, ensure_ascii=False)}")
 
+        # Создаем платеж с уникальным ключом идемпотентности
+        payment = Payment.create(payment_params, idempotence_key=secrets.token_hex(16))
         pay_url = payment.confirmation.confirmation_url
-        logger.info(f"Платеж создан, ссылка: {pay_url}")
+        logger.info(f"Платеж успешно создан, ссылка: {pay_url}")
 
         await query.edit_message_text(
             f"Перейдите по ссылке для оплаты:\n{pay_url}",
             disable_web_page_preview=True
         )
     except Exception as e:
-        logger.error(f"Ошибка создания платежа: {e}")
-        await query.edit_message_text("❌ Ошибка создания платежа. Попробуйте позже.")
+        logger.error(f"Ошибка создания платежа: {str(e)}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Ошибка создания платежа. Проверьте настройки или попробуйте позже.\n"
+            "Если проблема сохраняется, обратитесь в поддержку: @valture_support_bot"
+        )
 
 async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -237,7 +245,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Неизвестная команда", show_alert=True)
 
 # --- Запуск ---
-
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
