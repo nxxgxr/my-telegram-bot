@@ -58,6 +58,9 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Хранилище инвойсов
+invoices = {}
+
 @app.route('/')
 def home():
     return "✅ Valture бот работает!"
@@ -153,20 +156,26 @@ def cryptobot_webhook():
                     logger.error(f"Missing metadata in CryptoBot webhook: user_id={user_id}, username={username}")
                     return jsonify({"status": "error", "message": "Missing metadata"}), 400
                 
-                from application import application
-                job_queue = application.job_queue
-                job_queue.run_once(
-                    process_crypto_payment,
-                    0,
-                    context={
-                        'invoice_id': invoice_id,
-                        'user_id': int(user_id),
-                        'username': username,
-                        'chat_id': int(user_id)
-                    },
-                    name=f"cryptobot_payment_{invoice_id}"
-                )
-                logger.info(f"CryptoBot payment succeeded: invoice_id={invoice_id}, user={username}")
+                chat_id = int(user_id)
+                if chat_id in invoices and invoices[chat_id] == invoice_id:
+                    try:
+                        append_payment_to_sheet(invoice_id, username, "CryptoBot")
+                        with open('qw.docx', 'rb') as document:
+                            from application import application
+                            application.bot.send_document(
+                                chat_id=chat_id,
+                                document=document,
+                                caption="Оплата прошла успешно!✅ Вот ваш документ."
+                            )
+                        logger.info(f"CryptoBot payment processed, document sent for invoice_id={invoice_id}, user={username}")
+                        del invoices[chat_id]  # Удаляем инвойс после обработки
+                    except Exception as e:
+                        logger.error(f"Error sending document for invoice_id={invoice_id}: {str(e)}")
+                        from application import application
+                        application.bot.send_message(
+                            chat_id=chat_id,
+                            text="❌ Произошла ошибка при отправке документа. Обратитесь в поддержку: @s3pt1ck."
+                        )
                 return jsonify({"status": "ok"}), 200
         
         logger.debug(f"Ignored CryptoBot event: {update_type}")
@@ -195,35 +204,6 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"YooKassa payment processed, document sent for payment_id={payment_id}, user={username}")
     except Exception as e:
         logger.error(f"Error processing YooKassa payment {payment_id}: {str(e)}", exc_info=True)
-        error_text = (
-            "❌ *Произошла ошибка!*\n\n"
-            f"Не удалось отправить документ. Обратитесь в поддержку: @s3pt1ck. Ошибка: {str(e)}"
-        )
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=error_text,
-            parse_mode="Markdown"
-        )
-
-async def process_crypto_payment(context: ContextTypes.DEFAULT_TYPE):
-    """Process confirmed CryptoBot payment and send document."""
-    job_context = context.job.context
-    invoice_id = job_context['invoice_id']
-    user_id = job_context['user_id']
-    username = job_context['username']
-    chat_id = job_context['chat_id']
-
-    try:
-        append_payment_to_sheet(invoice_id, username, "CryptoBot")
-        with open('qw.docx', 'rb') as document:
-            await context.bot.send_document(
-                chat_id=chat_id,
-                document=document,
-                caption="Оплата прошла успешно!✅ Вот ваш документ."
-            )
-        logger.info(f"CryptoBot payment processed, document sent for invoice_id={invoice_id}, user={username}")
-    except Exception as e:
-        logger.error(f"Error processing CryptoBot payment {invoice_id}: {str(e)}", exc_info=True)
         error_text = (
             "❌ *Произошла ошибка!*\n\n"
             f"Не удалось отправить документ. Обратитесь в поддержку: @s3pt1ck. Ошибка: {str(e)}"
@@ -473,6 +453,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     user_id = query.from_user.id
     username = query.from_user.username or query.from_user.full_name
+    chat_id = query.message.chat.id
 
     try:
         logger.debug(f"Создание CryptoBot инвойса для пользователя: {username} (ID: {user_id})")
@@ -500,6 +481,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
         invoice_id = invoice["invoice_id"]
         pay_url = invoice["pay_url"]
 
+        invoices[chat_id] = invoice_id
         context.user_data["payment_type"] = "crypto"
         context.user_data["invoice_id"] = invoice_id
         context.user_data["username"] = username
@@ -622,11 +604,10 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Перейдите в 'Купить лицензию' и выберите способ оплаты.\n\n"
         "🔹 *Что делать, если документ не пришел?*\n"
         "Напишите в поддержку @s3pt1ck.\n\n"
-        "🔹 *Можно ли использовать ключ на нескольких устройствах?*\n"
-        "Нет, ключевой привязан к одному устройству."
+        "🔹 *Можно ли использовать лицензию на нескольких устройствах?*\n"
+        "Нет, лицензия привязана к одному устройству."
     )
     buttons = [("🔙 Назад в главное меню", "menu_main")]
-    buttons = [("Return to main menu", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
