@@ -17,9 +17,16 @@ from google.oauth2.service_account import Credentials
 
 from yookassa import Configuration, Payment
 
-# --- Настройки ---
+# --- Логирование ---
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN") or "7941872387:AAGZayILmna-qHHyQy5V50wDGylo3yFCZ0A"
+# --- Чтение и проверка переменных окружения ---
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 CREDS_FILE = "valture-license-bot-account.json"
 SPREADSHEET_NAME = "valture"
 SCOPE = [
@@ -27,23 +34,23 @@ SCOPE = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID")
-YOOKASSA_SECRET_KEY = os.environ.get("YOOKASSA_SECRET_KEY")
+YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID")
+YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY")
 
+logger.info(f"YOOKASSA_SHOP_ID: {repr(YOOKASSA_SHOP_ID)}")
+logger.info(f"YOOKASSA_SECRET_KEY: {'SET' if YOOKASSA_SECRET_KEY else 'NOT SET'}")
+
+if not BOT_TOKEN:
+    raise Exception("Переменная окружения BOT_TOKEN не задана!")
 if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
     raise Exception("YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY должны быть заданы в переменных окружения")
 
 Configuration.account_id = YOOKASSA_SHOP_ID
 Configuration.secret_key = YOOKASSA_SECRET_KEY
 
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# --- Flask для keep-alive и вебхука ---
 
 app = Flask(__name__)
-bot = Bot(token=BOT_TOKEN)  # Инициализируем один раз
 
 @app.route('/')
 def home():
@@ -63,25 +70,24 @@ def yookassa_webhook():
 
     data = json.loads(body)
     event = data.get('event')
-    logger.info(f"Получено событие от YooKassa: {event}")
+    logger.info(f"Получено событие от ЮKassa: {event}")
 
     if event == 'payment.succeeded':
         payment_obj = data.get('object', {}).get('payment', {})
         username = payment_obj.get('metadata', {}).get('username')
-        user_id = payment_obj.get('metadata', {}).get('user_id')  # Мы добавим user_id при создании платежа
-        if username and user_id:
+        if username:
             try:
                 license_key = generate_license()
                 append_license_to_sheet(license_key, username)
-                # Отправляем сообщение по числовому chat_id
-                bot.send_message(chat_id=int(user_id),
+                bot = Bot(token=BOT_TOKEN)
+                bot.send_message(chat_id=f"@{username}",
                                  text=f"🎉 *Поздравляем с покупкой!*\n\nВаш лицензионный ключ:\n`{license_key}`\n\nСохраните его в надежном месте!",
                                  parse_mode="Markdown")
-                logger.info(f"Лицензия отправлена пользователю @{username} ({user_id})")
+                logger.info(f"Лицензия отправлена пользователю @{username}")
             except Exception as e:
                 logger.error(f"Ошибка при отправке лицензии: {e}")
         else:
-            logger.warning("В webhook нет username или user_id в metadata")
+            logger.warning("В webhook нет username в metadata")
 
     return '', 200
 
@@ -106,6 +112,8 @@ def get_sheet():
             raise
     return sheet_cache
 
+# --- Генерация и сохранение лицензии ---
+
 def generate_license(length=32):
     key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
     logger.info(f"Сгенерирован ключ: {key}")
@@ -119,10 +127,12 @@ def append_license_to_sheet(license_key, username):
     sheet.append_row([license_key, "", username, now_str])
     logger.info(f"Лицензия {license_key} добавлена для {username}")
 
-# --- Telegram клавиатура и обработчики ---
+# --- Клавиатура ---
 
 def get_keyboard(buttons):
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
+
+# --- Обработчики Telegram ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -182,66 +192,38 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
-    username = query.from_user.username
-    user_id = query.from_user.id  # Добавляем user_id для webhook
-
-    if not username:
-        await query.edit_message_text("❌ Для оплаты необходимо, чтобы в вашем профиле был указан username Telegram. Пожалуйста, добавьте его и попробуйте снова.")
-        return
-
-    try:
-        payment = Payment.create({
-            "amount": {
-                "value": "1000.00",
-                "currency": "RUB"
-            },
-            "confirmation": {
-                "type": "redirect",
-                "return_url": "https://t.me/valture_bot"
-            },
-            "capture": True,
-            "description": f"Покупка лицензии Valture пользователем @{username}",
-            "metadata": {
-                "username": username,
-                "user_id": str(user_id)  # Передаем user_id для отправки сообщения
-            }
-        }, uuid=secrets.token_hex(16))
-
-        payment_url = payment.confirmation.confirmation_url
-
-        text = (
-            f"🔗 *Перейдите по ссылке для оплаты:*\n\n"
-            f"[Оплатить лицензию за 1000₽]({payment_url})\n\n"
-            f"После успешной оплаты лицензионный ключ будет автоматически выслан вам в этот чат."
-        )
-        await query.edit_message_text(text, parse_mode="Markdown", disable_web_page_preview=True)
-    except Exception as e:
-        logger.error(f"Ошибка при создании платежа: {e}")
-        await query.edit_message_text("❌ Произошла ошибка при создании платежа. Попробуйте позже.")
-
-async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    text = "📰 *Новости Valture*\n\nЗдесь будут появляться обновления и важные анонсы."
-    buttons = [("🔙 Назад", "menu_main")]
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+    # Тут логика создания платежа ЮKassa и получение ссылки
+    # Пока отправляем тестовую ссылку (замени на реальную)
+    pay_url = "https://yookassa.ru/pay?shopId=" + YOOKASSA_SHOP_ID
+    await query.edit_message_text(f"Перейдите по ссылке для оплаты:\n{pay_url}", disable_web_page_preview=True)
 
 async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    text = "❓ *FAQ*\n\nВопросы и ответы по использованию Valture."
+    text = (
+        "❓ *Часто задаваемые вопросы*\n\n"
+        "Q: Что делать, если не пришёл лицензионный ключ?\n"
+        "A: Проверьте, что вы оплатили через официальный сервис. Если проблема сохраняется, свяжитесь с поддержкой.\n\n"
+        "Q: Можно ли использовать лицензию на нескольких устройствах?\n"
+        "A: Нет, лицензия привязана к одному устройству.\n\n"
+        "Q: Как получить поддержку?\n"
+        "A: Напишите в чат поддержки через главное меню."
+    )
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    text = "📞 *Поддержка*\n\nЕсли у вас возникли вопросы, пишите сюда: @valture_support"
+    text = (
+        "📞 *Поддержка*\n\n"
+        "Если у вас возникли вопросы, напишите нам в Telegram:\n"
+        "@valture_support_bot"
+    )
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
@@ -253,28 +235,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await pay(update, context)
     elif data == "pay_confirm":
         await pay_confirm(update, context)
-    elif data == "menu_news":
-        await news(update, context)
     elif data == "menu_faq":
         await faq(update, context)
     elif data == "menu_support":
         await support(update, context)
     else:
-        await query.answer("Неизвестная команда", show_alert=True)
+        await query.answer("Неизвестная команда.", show_alert=True)
+
+# --- Запуск бота ---
 
 def main():
-    # Запускаем Flask в отдельном потоке
-    flask_thread = Thread(target=run_flask)
-    flask_thread.start()
-
-    # Запускаем Telegram бота
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(CallbackQueryHandler(callback_handler))
 
-    logger.info("Бот запущен!")
+    # Запуск Flask в отдельном потоке для вебхука и keep-alive
+    flask_thread = Thread(target=run_flask)
+    flask_thread.start()
+
     application.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
