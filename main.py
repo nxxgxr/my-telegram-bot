@@ -36,17 +36,14 @@ if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
 Configuration.account_id = YOOKASSA_SHOP_ID
 Configuration.secret_key = YOOKASSA_SECRET_KEY
 
-# --- Логирование ---
-
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- Flask для keep-alive и вебхука ---
-
 app = Flask(__name__)
+bot = Bot(token=BOT_TOKEN)  # Инициализируем один раз
 
 @app.route('/')
 def home():
@@ -66,25 +63,25 @@ def yookassa_webhook():
 
     data = json.loads(body)
     event = data.get('event')
-    logger.info(f"Получено событие от ЮKassa: {event}")
+    logger.info(f"Получено событие от YooKassa: {event}")
 
     if event == 'payment.succeeded':
         payment_obj = data.get('object', {}).get('payment', {})
         username = payment_obj.get('metadata', {}).get('username')
-        if username:
+        user_id = payment_obj.get('metadata', {}).get('user_id')  # Мы добавим user_id при создании платежа
+        if username and user_id:
             try:
                 license_key = generate_license()
                 append_license_to_sheet(license_key, username)
-                # Отправка сообщения пользователю через Telegram Bot API
-                bot = Bot(token=BOT_TOKEN)
-                bot.send_message(chat_id=f"@{username}",
+                # Отправляем сообщение по числовому chat_id
+                bot.send_message(chat_id=int(user_id),
                                  text=f"🎉 *Поздравляем с покупкой!*\n\nВаш лицензионный ключ:\n`{license_key}`\n\nСохраните его в надежном месте!",
                                  parse_mode="Markdown")
-                logger.info(f"Лицензия отправлена пользователю @{username}")
+                logger.info(f"Лицензия отправлена пользователю @{username} ({user_id})")
             except Exception as e:
                 logger.error(f"Ошибка при отправке лицензии: {e}")
         else:
-            logger.warning("В webhook нет username в metadata")
+            logger.warning("В webhook нет username или user_id в metadata")
 
     return '', 200
 
@@ -109,8 +106,6 @@ def get_sheet():
             raise
     return sheet_cache
 
-# --- Генерация и сохранение лицензии ---
-
 def generate_license(length=32):
     key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
     logger.info(f"Сгенерирован ключ: {key}")
@@ -124,12 +119,10 @@ def append_license_to_sheet(license_key, username):
     sheet.append_row([license_key, "", username, now_str])
     logger.info(f"Лицензия {license_key} добавлена для {username}")
 
-# --- Клавиатура ---
+# --- Telegram клавиатура и обработчики ---
 
 def get_keyboard(buttons):
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
-
-# --- Обработчики Telegram ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -191,12 +184,13 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     username = query.from_user.username
+    user_id = query.from_user.id  # Добавляем user_id для webhook
+
     if not username:
         await query.edit_message_text("❌ Для оплаты необходимо, чтобы в вашем профиле был указан username Telegram. Пожалуйста, добавьте его и попробуйте снова.")
         return
 
     try:
-        # Создаем платеж в ЮKassa
         payment = Payment.create({
             "amount": {
                 "value": "1000.00",
@@ -204,12 +198,13 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             },
             "confirmation": {
                 "type": "redirect",
-                "return_url": "https://t.me/valture_bot"  # Замени на ссылку на бота или свой сайт
+                "return_url": "https://t.me/valture_bot"
             },
             "capture": True,
             "description": f"Покупка лицензии Valture пользователем @{username}",
             "metadata": {
-                "username": username
+                "username": username,
+                "user_id": str(user_id)  # Передаем user_id для отправки сообщения
             }
         }, uuid=secrets.token_hex(16))
 
@@ -265,19 +260,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "menu_support":
         await support(update, context)
     else:
-        await query.answer("Неизвестная команда")
-
-# --- Основная функция запуска бота и Flask ---
+        await query.answer("Неизвестная команда", show_alert=True)
 
 def main():
-    app_thread = Thread(target=run_flask)
-    app_thread.start()
+    # Запускаем Flask в отдельном потоке
+    flask_thread = Thread(target=run_flask)
+    flask_thread.start()
 
+    # Запускаем Telegram бота
     application = Application.builder().token(BOT_TOKEN).build()
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
 
-    logger.info("Бот запущен.")
+    logger.info("Бот запущен!")
     application.run_polling()
 
 if __name__ == '__main__':
