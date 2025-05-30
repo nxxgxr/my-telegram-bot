@@ -394,7 +394,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def pay_crypto(update: Update,:: ContextTypes.DEFAULT_TYPE):
+async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """CryptoBot payment with confirmation prompt and Back button."""
     query = update.callback_query
     await query.answer()
