@@ -19,7 +19,7 @@ from yookassa import Configuration, Payment
 # --- Конфигурация (цены и ссылка на приложение) ---
 
 PRICES = {
-    "crypto": {"amount": 0.1, "currency": "TON", "approx_usd": 12.7},
+    "crypto": {"amount": 4.0, "currency": "TON", "approx_usd": 12.7},
     "yookassa": {"amount": 1.0, "currency": "RUB", "approx_usd": 12.7}
 }
 APP_DOWNLOAD_LINK = "https://www.dropbox.com/scl/fi/ze5ebd909z2qeaaucn56q/VALTURE.exe?rlkey=ihdzk8voej4oikrdhq0wfzvbb&st=jj5tgroa&dl=1"
@@ -43,16 +43,18 @@ CRYPTO_BOT_API = "https://pay.crypt.bot/api"
 if YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY:
     Configuration.account_id = YOOKASSA_SHOP_ID
     Configuration.secret_key = YOOKASSA_SECRET_KEY
+else:
+    raise ValueError("YooKassa credentials not configured")
 
 # --- Логирование ---
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.DEBUG
 )
 logger = logging.getLogger(__name__)
 
-# --- Flask application ---
+# --- Flask приложение ---
 
 app = Flask(__name__)
 
@@ -78,7 +80,7 @@ def yookassa_webhook():
     """Handle YooKassa payment notifications."""
     try:
         event_json = request.get_json()
-        logger.debug(f"YooKassa webhook received: {json.dumps(event_json, indent=2)}")
+        logger.debug(f"YooKassa webhook received: {json.dumps(event_json, indent=2, ensure_ascii=False)}")
         
         if not event_json or 'event' not in event_json or 'object' not in event_json:
             logger.error("Invalid webhook payload")
@@ -88,14 +90,14 @@ def yookassa_webhook():
         payment_object = event_json['object']
         
         if event == 'payment.succeeded':
-            payment_id = payment_object['id']
+            payment_id = payment_object.get('id')
             metadata = payment_object.get('metadata', {})
             user_id = metadata.get('user_id')
             username = metadata.get('username')
             
-            if not user_id or not username:
-                logger.error(f"Missing metadata: user_id={user_id}, username={username}")
-                return jsonify({"status": "error", "message": "Missing metadata"}), 400
+            if not payment_id or not user_id or not username:
+                logger.error(f"Missing critical data: payment_id={payment_id}, user_id={user_id}, username={username}")
+                return jsonify({"status": "error", "message": "Missing data"}), 400
 
             from application import application
             job_queue = application.job_queue
@@ -114,9 +116,10 @@ def yookassa_webhook():
             return jsonify({"status": "ok"}), 200
         
         elif event == 'payment.canceled':
-            logger.warning(f"YooKassa payment canceled: payment_id={payment_object['id']}")
+            logger.warning(f"YooKassa payment canceled: payment_id={payment_object.get('id')}")
             return jsonify({"status": "ok"}), 200
         
+        logger.debug(f"Ignored webhook event: {event}")
         return jsonify({"status": "ignored"}), 200
     
     except Exception as e:
@@ -132,8 +135,9 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
     chat_id = job_context['chat_id']
 
     try:
-        # Verify payment status via YooKassa API
+        # Verify payment status
         payment = Payment.find_one(payment_id)
+        logger.debug(f"YooKassa payment {payment_id} status: {payment.status}")
         if payment.status != "succeeded":
             logger.warning(f"YooKassa payment not succeeded: payment_id={payment_id}, status={payment.status}")
             await context.bot.send_message(
@@ -159,18 +163,21 @@ async def process_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             disable_web_page_preview=True
         )
-        logger.info(f"YooKassa payment processed, key issued: {license_key} for {username}, payment_id={payment_id}")
+        logger.info(f"YooKassa payment processed, key issued: {license_key[:8]}... for {username}, payment_id={payment_id}")
     except Exception as e:
         logger.error(f"Error processing YooKassa payment {payment_id}: {str(e)}", exc_info=True)
         error_text = (
             "❌ *Произошла ошибка!*\n\n"
             "Не удалось выдать ключ. Обратитесь в поддержку: @s3pt1ck."
         )
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=error_text,
-            parse_mode="Markdown"
-        )
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=error_text,
+                parse_mode="Markdown"
+            )
+        except Exception as send_error:
+            logger.error(f"Failed to send error message to chat_id {chat_id}: {str(send_error)}")
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
@@ -186,12 +193,12 @@ def setup_google_creds():
             creds_json = base64.b64decode(GOOGLE_CREDS_JSON_BASE64).decode("utf-8")
             with open(CREDS_FILE, "w") as f:
                 f.write(creds_json)
-            logger.info("Google credentials decoded and saved to temporary file")
+            logger.info("Google credentials decoded and saved")
         except Exception as e:
             logger.error(f"Error decoding Google credentials: {str(e)}")
             raise
     elif not os.path.exists(CREDS_FILE):
-        logger.error("Google credentials file not found and GOOGLE_CREDS_JSON_BASE64 not set")
+        logger.error("Google credentials file not found")
         raise FileNotFoundError("Google credentials file not found")
     else:
         logger.info("Using existing Google credentials file")
@@ -238,11 +245,11 @@ def append_license_to_sheet(license_key, username, payment_id, payment_type):
         logger.error(f"Error appending license: {str(e)}")
         raise
 
-# --- Payment Logic ---
+# --- Платежная логика ---
 
 def create_crypto_invoice(amount, asset="TON", description="Valture License"):
     """Create a CryptoBot invoice."""
-    logger.debug(f"Creating invoice: amount={amount}, asset={asset}, description={description}")
+    logger.debug(f"Creating invoice: amount={amount}, asset={asset}")
     if not CRYPTOBOT_API_TOKEN:
         logger.error("CRYPTOBOT_API_TOKEN not set")
         return None, "CRYPTOBOT_API_TOKEN not set"
@@ -298,23 +305,13 @@ def check_invoice_status(invoice_id):
         else:
             logger.error(f"Error checking invoice status: {data.get('error', 'Unknown error')}")
             return None
-    except requests.exceptions.HTTPError as http_err:
-        logger.error(f"HTTP error checking invoice: {str(http_err)}")
-        return None
-    except requests.exceptions.RequestException as req_err:
-        logger.error(f"Network error checking invoice: {str(req_err)}")
-        return None
     except Exception as e:
-        logger.error(f"General error checking invoice: {str(e)}")
+        logger.error(f"Error checking invoice: {str(e)}")
         return None
 
 def create_yookassa_payment(amount, description, user_id, username):
     """Create a YooKassa payment."""
     logger.debug(f"Creating YooKassa payment: amount={amount}, user_id={user_id}")
-    if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
-        logger.error("YOOKASSA_SHOP_ID or YOOKASSA_SECRET_KEY not set")
-        return None, "YooKassa credentials not configured"
-
     try:
         idempotence_key = str(uuid4())
         payment = Payment.create({
@@ -341,7 +338,58 @@ def create_yookassa_payment(amount, description, user_id, username):
         logger.error(f"Error creating YooKassa payment: {str(e)}")
         return None, f"YooKassa error: {str(e)}"
 
-# --- Telegram Bot Logic ---
+async def check_yookassa_payment(context: ContextTypes.DEFAULT_TYPE):
+    """Periodically check YooKassa payment status."""
+    job_context = context.job.context
+    payment_id = job_context['payment_id']
+    user_id = job_context['user_id']
+    username = job_context['username']
+    chat_id = job_context['chat_id']
+
+    try:
+        payment = Payment.find_one(payment_id)
+        logger.debug(f"Checking YooKassa payment {payment_id} status: {payment.status}")
+        if payment.status == "succeeded":
+            license_key = generate_license()
+            append_license_to_sheet(license_key, username, payment_id, "yookassa")
+            text = (
+                "🎉 *Поздравляем с покупкой!*\n\n"
+                "Ваш лицензионный ключ (HWID):\n"
+                f"`{license_key}`\n\n"
+                "Скачайте приложение:\n"
+                f"[VALTURE.exe]({APP_DOWNLOAD_LINK})\n\n"
+                "Сохраните ключ в надежном месте! 🚀"
+            )
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
+            logger.info(f"YooKassa payment confirmed via check, key issued: {license_key[:8]}... for {username}, payment_id={payment_id}")
+            context.job.schedule_removal()
+            context.user_data.clear()
+        elif payment.status in ["canceled", "waiting_for_capture"]:
+            logger.warning(f"YooKassa payment {payment_id} not completed: status={payment.status}")
+            if context.job.current_run_count > 30:  # Stop after ~5 minutes
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ *Оплата не завершена!*\n\nПлатеж истек или отменен. Попробуйте снова или свяжитесь с @s3pt1ck.",
+                    parse_mode="Markdown"
+                )
+                context.job.schedule_removal()
+                context.user_data.clear()
+    except Exception as e:
+        logger.error(f"Error checking YooKassa payment {payment_id}: {str(e)}")
+        if context.job.current_run_count > 30:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ *Ошибка проверки оплаты!*\n\nПопробуйте снова или свяжитесь с @s3pt1ck.",
+                parse_mode="Markdown"
+            )
+            context.job.schedule_removal()
+
+# --- Логика Telegram-бота ---
 
 def get_keyboard(buttons):
     """Create an inline keyboard."""
@@ -350,11 +398,11 @@ def get_keyboard(buttons):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Welcome message."""
     welcome_text = (
-        "🎮 *Welcome to Valture!*\n\n"
-        "Your ultimate tool for gaming performance! 🚀\n"
-        "Choose an option below to start:"
+        "🎮 *Добро пожаловать в Valture!*\n\n"
+        "Ваш лучший инструмент для игровой производительности! 🚀\n"
+        "Выберите опцию ниже:"
     )
-    buttons = [("🏠 Main Menu", "menu_main")]
+    buttons = [("🏠 Главное меню", "menu_main")]
     await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -362,14 +410,14 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     buttons = [
-        ("💳 Buy License", "menu_pay"),
-        ("ℹ️ About Valture", "menu_about"),
-        ("📰 News", "menu_news"),
+        ("💳 Купить лицензию", "menu_pay"),
+        ("ℹ️ О Valture", "menu_about"),
+        ("📰 Новости", "menu_news"),
         ("❓ FAQ", "menu_faq"),
-        ("📞 Support", "menu_support"),
+        ("📞 Поддержка", "menu_support"),
     ]
     await query.edit_message_text(
-        "🏠 *Main Menu*\n\nChoose a section:",
+        "🏠 *Главное меню*\n\nВыберите раздел:",
         parse_mode="Markdown",
         reply_markup=get_keyboard(buttons)
     )
@@ -379,42 +427,39 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "✨ *Valture — Your Path to Gaming Excellence*\n\n"
-        "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        "Valture is a cutting-edge tool designed for gamers who refuse to compromise. "
-        "Our mission is to take your gaming performance to the next level with maximum smoothness, "
-        "stability, and system responsiveness. With Valture, you’ll gain the competitive edge you’ve always dreamed of.\n\n"
-        "🔥 *Why Choose Valture?*\n"
-        "🚀 20–30% FPS boost\n"
-        "🛡️ Stable framerate\n"
-        "💡 Lightning-fast responsiveness\n"
-        "🔋 Windows optimization\n"
-        "🛳️ Smooth controls\n"
-        "🖥️ Seamless in-game visuals\n\n"
-        "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        "_Built for gamers who value quality and aim for victory._"
+        "✨ *Valture — Ваш путь к совершенству в играх*\n\n"
+        "Valture — это передовой инструмент для геймеров, которые не идут на компромиссы. "
+        "Мы повышаем производительность, обеспечивая плавность, стабильность и отзывчивость.\n\n"
+        "🔥 *Почему выбирают Valture?*\n"
+        "🚀 Увеличение FPS на 20–30%\n"
+        "🛡️ Стабильный фреймрейт\n"
+        "💡 Молниеносная отзывчивость\n"
+        "🔋 Оптимизация Windows\n"
+        "🛳️ Плавность управления\n"
+        "🖥️ Плавность картинки\n\n"
+        "_Для геймеров, стремящихся к победе._"
     )
-    buttons = [("🔙 Back to Main Menu", "menu_main")]
+    buttons = [("🔙 Назад в главное меню", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Payment menu with prices at the top."""
+    """Payment menu with prices."""
     query = update.callback_query
     await query.answer()
     text = (
-        "💳 *Buy Valture License*\n\n"
-        f"💰 *Prices:*\n"
+        "💳 *Покупка лицензии Valture*\n\n"
+        f"💰 *Цены:*\n"
         f"- *{PRICES['crypto']['amount']} {PRICES['crypto']['currency']}* (~${PRICES['crypto']['approx_usd']})\n"
         f"- *{PRICES['yookassa']['amount']} {PRICES['yookassa']['currency']}* (~${PRICES['yookassa']['approx_usd']})\n\n"
-        "Choose a payment method:\n"
-        "- *CryptoBot*: Pay with cryptocurrency.\n"
-        "- *YooKassa*: Pay with card.\n\n"
-        "You’ll receive your HWID key and app link automatically after payment."
+        "Выберите способ оплаты:\n"
+        "- *CryptoBot*: Оплата криптовалютой.\n"
+        "- *YooKassa*: Оплата картой.\n\n"
+        "После оплаты вы автоматически получите HWID-ключ и ссылку на приложение."
     )
     buttons = [
-        ("💸 Pay via CryptoBot", "pay_crypto"),
-        ("💳 Pay via YooKassa", "pay_yookassa"),
-        ("🔙 Back to Main Menu", "menu_main")
+        ("💸 Оплатить через CryptoBot", "pay_crypto"),
+        ("💳 Оплатить через YooKassa", "pay_yookassa"),
+        ("🔙 Назад в главное меню", "menu_main")
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
@@ -423,13 +468,13 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "💸 *Confirm CryptoBot Payment*\n\n"
-        f"You’re about to pay *{PRICES['crypto']['amount']} {PRICES['crypto']['currency']}* for a Valture license.\n"
-        "Proceed with payment?"
+        "💸 *Подтверждение оплаты CryptoBot*\n\n"
+        f"Вы собираетесь оплатить *{PRICES['crypto']['amount']} {PRICES['crypto']['currency']}* за лицензию Valture.\n"
+        "Продолжить?"
     )
     buttons = [
-        ("✅ Confirm Payment", "pay_crypto_confirm"),
-        ("🔙 Back to Payment Options", "menu_pay")
+        ("✅ Подтвердить оплату", "pay_crypto_confirm"),
+        ("🔙 Назад к способам оплаты", "menu_pay")
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
@@ -449,13 +494,13 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         if not invoice:
             error_msg = (
-                "❌ *Something went wrong!*\n\n"
-                f"Couldn’t create invoice: {error or 'Unknown error'}.\n"
-                "Try again or contact @s3pt1ck."
+                "❌ *Ошибка!*\n\n"
+                f"Не удалось создать инвойс: {error or 'Неизвестная ошибка'}.\n"
+                "Попробуйте снова или свяжитесь с @s3pt1ck."
             )
             buttons = [
-                ("🔄 Try Again", "pay_crypto"),
-                ("🔙 Back to Payment Options", "menu_pay")
+                ("🔄 Попробовать снова", "pay_crypto"),
+                ("🔙 Назад к способам оплаты", "menu_pay")
             ]
             logger.error(f"CryptoBot error: {error}")
             await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -468,15 +513,15 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data["invoice_id"] = invoice_id
         context.user_data["username"] = username
         context.user_data["chat_id"] = query.message.chat_id
-        logger.info(f"CryptoBot invoice created: invoice_id={invoice_id}, pay_url={pay_url}")
+        logger.info(f"CryptoBot invoice created: invoice_id={invoice_id}")
 
         text = (
-            "💸 *Pay via CryptoBot*\n\n"
-            f"Click below to pay *{PRICES['crypto']['amount']} {PRICES['crypto']['currency']}*:\n"
-            f"[Pay via CryptoBot]({pay_url})\n\n"
-            "Your HWID key and app link will be sent automatically after payment."
+            "💸 *Оплатите через CryptoBot*\n\n"
+            f"Нажмите ниже для оплаты *{PRICES['crypto']['amount']} {PRICES['crypto']['currency']}*:\n"
+            f"[Оплатить через CryptoBot]({pay_url})\n\n"
+            "Ключ и ссылка будут отправлены автоматически после оплаты."
         )
-        buttons = [("🔙 Back to Payment Options", "menu_pay")]
+        buttons = [("🔙 Назад к способам оплаты", "menu_pay")]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
 
         context.job_queue.run_repeating(
@@ -494,12 +539,12 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"Critical error in pay_crypto_confirm: {str(e)}", exc_info=True)
         error_msg = (
-            "❌ *Something broke!*\n\n"
-            "Couldn’t process the request. Try again or contact @s3pt1ck."
+            "❌ *Ошибка!*\n\n"
+            "Не удалось обработать запрос. Попробуйте снова или свяжитесь с @s3pt1ck."
         )
         buttons = [
-            ("🔄 Try Again", "pay_crypto"),
-            ("🔙 Back to Payment Options", "menu_pay")
+            ("🔄 Попробовать снова", "pay_crypto"),
+            ("🔙 Назад к способам оплаты", "menu_pay")
         ]
         await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
@@ -517,14 +562,14 @@ async def check_crypto_payment(context: ContextTypes.DEFAULT_TYPE):
             license_key = generate_license()
             append_license_to_sheet(license_key, username, invoice_id, "crypto")
             text = (
-                "🎉 *Congratulations on your purchase!*\n\n"
-                "Your HWID license key:\n"
+                "🎉 *Поздравляем с покупкой!*\n\n"
+                "Ваш лицензионный ключ (HWID):\n"
                 f"`{license_key}`\n\n"
-                "Download the app:\n"
+                "Скачайте приложение:\n"
                 f"[VALTURE.exe]({APP_DOWNLOAD_LINK})\n\n"
-                "Keep your key safe! 🚀"
+                "Сохраните ключ в надежном месте! 🚀"
             )
-            buttons = [("🏠 Back to Main Menu", "menu_main")]
+            buttons = [("🏠 Назад в главное меню", "menu_main")]
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=text,
@@ -538,12 +583,12 @@ async def check_crypto_payment(context: ContextTypes.DEFAULT_TYPE):
         elif status in ["expired", "cancelled"]:
             logger.warning(f"CryptoBot invoice {invoice_id} expired or cancelled: {status}")
             text = (
-                "❌ *Payment not completed*\n\n"
-                "The invoice has expired or was cancelled. Please try again."
+                "❌ *Оплата не завершена*\n\n"
+                "Срок действия инвойса истек или он был отменен. Попробуйте снова."
             )
             buttons = [
-                ("🔄 Try Again", "pay_crypto"),
-                ("🔙 Back to Payment Options", "menu_pay")
+                ("🔄 Попробовать снова", "pay_crypto"),
+                ("🔙 Назад к способам оплаты", "menu_pay")
             ]
             await context.bot.send_message(
                 chat_id=chat_id,
@@ -556,12 +601,12 @@ async def check_crypto_payment(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error checking CryptoBot payment: {str(e)}")
         text = (
-            "❌ *Payment check error!*\n\n"
-            "Try again or contact @s3pt1ck."
+            "❌ *Ошибка проверки оплаты!*\n\n"
+            "Попробуйте снова или свяжитесь с @s3pt1ck."
         )
         buttons = [
-            ("🔄 Try Again", "pay_crypto"),
-            ("🔙 Back to Payment Options", "menu_pay")
+            ("🔄 Попробовать снова", "pay_crypto"),
+            ("🔙 Назад к способам оплаты", "menu_pay")
         ]
         await context.bot.send_message(
             chat_id=chat_id,
@@ -576,13 +621,13 @@ async def pay_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "💳 *Confirm YooKassa Payment*\n\n"
-        f"You’re about to pay *{PRICES['yookassa']['amount']} {PRICES['yookassa']['currency']}* for a Valture license.\n"
-        "Proceed with payment?"
+        "💳 *Подтверждение оплаты YooKassa*\n\n"
+        f"Вы собираетесь оплатить *{PRICES['yookassa']['amount']} {PRICES['yookassa']['currency']}* за лицензию Valture.\n"
+        "Продолжить?"
     )
     buttons = [
-        ("✅ Confirm Payment", "pay_yookassa_confirm"),
-        ("🔙 Back to Payment Options", "menu_pay")
+        ("✅ Подтвердить оплату", "pay_yookassa_confirm"),
+        ("🔙 Назад к способам оплаты", "menu_pay")
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
@@ -603,13 +648,13 @@ async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         if not payment:
             error_msg = (
-                "❌ *Something went wrong!*\n\n"
-                f"Couldn’t create payment: {error or 'Unknown error'}.\n"
-                "Try again or contact @s3pt1ck."
+                "❌ *Ошибка!*\n\n"
+                f"Не удалось создать платеж: {error or 'Неизвестная ошибка'}.\n"
+                "Попробуйте снова или свяжитесь с @s3pt1ck."
             )
             buttons = [
-                ("🔄 Try Again", "pay_yookassa"),
-                ("🔙 Back to Payment Options", "menu_pay")
+                ("🔄 Попробовать снова", "pay_yookassa"),
+                ("🔙 Назад к способам оплаты", "menu_pay")
             ]
             logger.error(f"YooKassa error: {error}")
             await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -621,25 +666,40 @@ async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data["payment_type"] = "yookassa"
         context.user_data["payment_id"] = payment_id
         context.user_data["username"] = username
-        logger.info(f"YooKassa payment created: payment_id={payment_id}, confirmation_url={confirmation_url}")
+        context.user_data["chat_id"] = query.message.chat_id
+        logger.info(f"YooKassa payment created: payment_id={payment_id}")
 
         text = (
-            "💳 *Pay via YooKassa*\n\n"
-            f"Click below to pay *{PRICES['yookassa']['amount']} {PRICES['yookassa']['currency']}*:\n"
-            f"[Pay via YooKassa]({confirmation_url})\n\n"
-            "Your HWID key and app link will be sent automatically after payment."
+            "💳 *Оплатите через YooKassa*\n\n"
+            f"Нажмите ниже для оплаты *{PRICES['yookassa']['amount']} {PRICES['yookassa']['currency']}*:\n"
+            f"[Оплатить через YooKassa]({confirmation_url})\n\n"
+            "Ключ и ссылка будут отправлены автоматически после оплаты."
         )
-        buttons = [("🔙 Back to Payment Options", "menu_pay")]
+        buttons = [("🔙 Назад к способам оплаты", "menu_pay")]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
+
+        # Start periodic payment check
+        context.job_queue.run_repeating(
+            check_yookassa_payment,
+            interval=10,
+            first=10,
+            context={
+                'payment_id': payment_id,
+                'user_id': user_id,
+                'username': username,
+                'chat_id': query.message.chat_id
+            },
+            name=f"yookassa_check_{payment_id}"
+        )
     except Exception as e:
         logger.error(f"Critical error in pay_yookassa_confirm: {str(e)}", exc_info=True)
         error_msg = (
-            "❌ *Something broke!*\n\n"
-            "Couldn’t process the request. Try again or contact @s3pt1ck."
+            "❌ *Ошибка!*\n\n"
+            "Не удалось обработать запрос. Попробуйте снова или свяжитесь с @s3pt1ck."
         )
         buttons = [
-            ("🔄 Try Again", "pay_yookassa"),
-            ("🔙 Back to Payment Options", "menu_pay")
+            ("🔄 Попробовать снова", "pay_yookassa"),
+            ("🔙 Назад к способам оплаты", "menu_pay")
         ]
         await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
@@ -648,12 +708,12 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "📞 *Need help?*\n\n"
-        "Contact our support:\n"
+        "📞 *Нужна помощь?*\n\n"
+        "Свяжитесь с поддержкой:\n"
         "👉 *@s3pt1ck*\n\n"
-        "We’ll respond as quickly as possible! 😊"
+        "Мы ответим максимально быстро! 😊"
     )
-    buttons = [("🔙 Back to Main Menu", "menu_main")]
+    buttons = [("🔙 Назад в главное меню", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -661,15 +721,15 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "❓ *Frequently Asked Questions*\n\n"
-        "🔹 *How to get a license?*\n"
-        "Go to 'Buy License' and choose a payment method.\n\n"
-        "🔹 *What if the key doesn’t work?*\n"
-        "Contact @s3pt1ck for support.\n\n"
-        "🔹 *Can I use the key on multiple devices?*\n"
-        "No, the key is tied to one device."
+        "❓ *Часто задаваемые вопросы*\n\n"
+        "🔹 *Как получить лицензию?*\n"
+        "Перейдите в 'Купить лицензию' и выберите способ оплаты.\n\n"
+        "🔹 *Что делать, если ключ не пришел?*\n"
+        "Напишите в поддержку: @s3pt1ck.\n\n"
+        "🔹 *Можно ли использовать ключ на нескольких устройствах?*\n"
+        "Нет, ключ привязан к одному устройству."
     )
-    buttons = [("🔙 Back to Main Menu", "menu_main")]
+    buttons = [("🔙 Назад в главное меню", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -677,11 +737,11 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "📰 *Valture News*\n\n"
-        "Stay tuned for updates!\n"
-        "No new announcements yet. 📅"
+        "📰 *Новости Valture*\n\n"
+        "Следите за обновлениями!\n"
+        "Пока новых объявлений нет. 📅"
     )
-    buttons = [("🔙 Back to Main Menu", "menu_main")]
+    buttons = [("🔙 Назад в главное меню", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
