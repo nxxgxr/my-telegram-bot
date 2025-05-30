@@ -1,16 +1,27 @@
-async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    try:
-        amount_value = "1000.00"
-        user = query.from_user
-        username = user.username or str(user.id)
-        chat_id = query.message.chat_id
+import logging
+import secrets
+import json
+from yookassa import Configuration, Payment
 
-        logger.info(f"Создаем платеж для {username} на сумму {amount_value}")
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Настройка ЮKassa
+YOOKASSA_SHOP_ID = "1095145"
+YOOKASSA_SECRET_KEY = "live_Kqe5487dKG7PHL5fLOzBC0-jOWWXfxzrLHS2s0YWVz0"
+
+Configuration.account_id = YOOKASSA_SHOP_ID
+Configuration.secret_key = YOOKASSA_SECRET_KEY
+
+def create_test_payment():
+    try:
         payment_params = {
             "amount": {
-                "value": amount_value,
+                "value": "1000.00",
                 "currency": "RUB"
             },
             "confirmation": {
@@ -18,25 +29,26 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "return_url": "https://rabochij-production.up.railway.app/"
             },
             "capture": True,
-            "description": "Покупка лицензии Valture",
+            "description": "Тестовый платеж для Valture",
             "metadata": {
-                "username": username,
-                "chat_id": str(chat_id)
+                "username": "test_user",
+                "chat_id": "123456789"
             }
         }
-        logger.debug(f"Параметры платежа: {json.dumps(payment_params, ensure_ascii=False)}")
+        logger.info(f"Параметры платежа: {json.dumps(payment_params, ensure_ascii=False)}")
 
+        # Создаем платеж
         payment = Payment.create(payment_params, idempotence_key=secrets.token_hex(16))
         pay_url = payment.confirmation.confirmation_url
         logger.info(f"Платеж успешно создан, ссылка: {pay_url}")
-
-        await query.edit_message_text(
-            f"Перейдите по ссылке для оплаты:\n{pay_url}",
-            disable_web_page_preview=True
-        )
+        return pay_url
     except Exception as e:
         logger.error(f"Ошибка создания платежа: {str(e)}", exc_info=True)
-        await query.edit_message_text(
-            "❌ Ошибка создания платежа. Проверьте настройки или попробуйте позже.\n"
-            "Обратитесь в поддержку: @valture_support_bot"
-        )
+        return None
+
+if __name__ == "__main__":
+    url = create_test_payment()
+    if url:
+        print(f"Ссылка на оплату: {url}")
+    else:
+        print("Не удалось создать платеж")
