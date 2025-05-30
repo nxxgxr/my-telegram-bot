@@ -161,7 +161,7 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     invoice_data = {
         "chat_id": query.from_user.id,
-        "amount": 1000,  # Если нужно — умножай на 100 (копейки), проверь документацию
+        "amount": 1000,  # рубли
         "currency": "RUB",
         "payload": "valture_license_purchase"
     }
@@ -173,20 +173,26 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.info(f"Данные для платежа: {invoice_data}")
 
+    CRYPTOBOT_CREATE_INVOICE_URL = "https://api.cryptobot.org/v1/payments/create"
+
     async with aiohttp.ClientSession() as session:
-        async with session.post("https://pay.crypt.bot/invoice", json=invoice_data, headers=headers) as resp:
+        async with session.post(CRYPTOBOT_CREATE_INVOICE_URL, json=invoice_data, headers=headers) as resp:
             text = await resp.text()
             logger.info(f"CryptoBot response status: {resp.status}")
             logger.info(f"CryptoBot response body: {text}")
 
             if resp.status == 200:
                 data = await resp.json()
-                pay_url = data.get("pay_url")
+                pay_url = data.get("payment_url") or data.get("pay_url")
                 if pay_url:
                     buttons = [[InlineKeyboardButton("Перейти к оплате", url=pay_url)]]
                     keyboard = InlineKeyboardMarkup(buttons)
                     await query.edit_message_text("Нажмите кнопку ниже, чтобы оплатить лицензию:", reply_markup=keyboard)
                     return
+            elif resp.status == 401:
+                await query.edit_message_text("❌ Ошибка авторизации (401). Проверьте API токен CryptoBot.")
+                logger.error("Ошибка 401 Unauthorized — проверьте CRYPTOBOT_API_TOKEN")
+                return
             await query.edit_message_text("❌ Ошибка создания платежа. Попробуйте позже.")
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -211,7 +217,7 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "— Сколько времени действует лицензия?\n"
         "Лицензия бессрочная.\n\n"
         "— Можно ли вернуть деньги?\n"
-        "Возврат возможен в течение 14 дней при условии, что лицензия не была использована."
+        "Возврат средств возможен в течение 14 дней при отсутствии использования лицензии."
     )
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -221,8 +227,9 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     text = (
         "📰 *Новости Valture*\n\n"
-        "🔔 Скоро новый апдейт с улучшенной оптимизацией!\n"
-        "Следите за новостями в нашем канале."
+        "- Версия 1.0 вышла!\n"
+        "- Добавлена поддержка новых игр.\n"
+        "- Скоро новые функции!"
     )
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -230,38 +237,42 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Извините, я не понимаю эту команду.")
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
-    if data == "menu_main":
-        await main_menu(update, context)
-    elif data == "menu_about":
-        await about(update, context)
-    elif data == "menu_pay":
-        await pay(update, context)
-    elif data == "pay_confirm":
-        await pay_confirm(update, context)
-    elif data == "menu_support":
-        await support(update, context)
-    elif data == "menu_faq":
-        await faq(update, context)
-    elif data == "menu_news":
-        await news(update, context)
+    menu_map = {
+        "menu_main": main_menu,
+        "menu_about": about,
+        "menu_pay": pay,
+        "pay_confirm": pay_confirm,
+        "menu_support": support,
+        "menu_faq": faq,
+        "menu_news": news,
+    }
+
+    handler = menu_map.get(data)
+    if handler:
+        await handler(update, context)
     else:
-        await query.answer("Неизвестная команда", show_alert=True)
+        await query.answer("Неизвестная команда.", show_alert=True)
+
+# --- Основная функция ---
 
 def main():
-    # Запуск Flask в отдельном потоке
-    Thread(target=run_flask).start()
+    # Запуск Flask в отдельном потоке (для keep-alive на хостинге)
+    flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
 
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_handler))
-
+    application.add_handler(CallbackQueryHandler(callback_router))
     application.add_handler(CommandHandler("help", start))
-    application.add_handler(CommandHandler("menu", start))
+    application.add_handler(CommandHandler("faq", faq))
+
+    application.add_handler(CommandHandler("news", news))
 
     application.run_polling()
 
