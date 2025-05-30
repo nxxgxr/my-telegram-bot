@@ -17,15 +17,14 @@ from google.oauth2.service_account import Credentials
 
 from yookassa import Configuration, Payment
 
-# --- Логирование ---
+# --- Настройка логирования ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- Чтение и проверка переменных окружения ---
-
+# --- Переменные окружения и константы ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CREDS_FILE = "valture-license-bot-account.json"
 SPREADSHEET_NAME = "valture"
@@ -37,19 +36,15 @@ SCOPE = [
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID")
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY")
 
-logger.info(f"YOOKASSA_SHOP_ID: {repr(YOOKASSA_SHOP_ID)}")
-logger.info(f"YOOKASSA_SECRET_KEY: {'SET' if YOOKASSA_SECRET_KEY else 'NOT SET'}")
-
 if not BOT_TOKEN:
     raise Exception("Переменная окружения BOT_TOKEN не задана!")
 if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
-    raise Exception("YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY должны быть заданы в переменных окружения")
+    raise Exception("YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY должны быть заданы")
 
 Configuration.account_id = YOOKASSA_SHOP_ID
 Configuration.secret_key = YOOKASSA_SECRET_KEY
 
-# --- Flask для keep-alive и вебхука ---
-
+# --- Flask ---
 app = Flask(__name__)
 
 @app.route('/')
@@ -96,24 +91,18 @@ def run_flask():
     app.run(host="0.0.0.0", port=port)
 
 # --- Google Sheets ---
-
 sheet_cache = None
 
 def get_sheet():
     global sheet_cache
     if sheet_cache is None:
-        try:
-            creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPE)
-            client = gspread.authorize(creds)
-            sheet_cache = client.open(SPREADSHEET_NAME).sheet1
-            logger.info("Успешно подключено к Google Sheets")
-        except Exception as e:
-            logger.error(f"Ошибка подключения к Google Sheets: {e}")
-            raise
+        creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPE)
+        client = gspread.authorize(creds)
+        sheet_cache = client.open(SPREADSHEET_NAME).sheet1
+        logger.info("Успешно подключено к Google Sheets")
     return sheet_cache
 
-# --- Генерация и сохранение лицензии ---
-
+# --- Генерация лицензии и сохранение в таблицу ---
 def generate_license(length=32):
     key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
     logger.info(f"Сгенерирован ключ: {key}")
@@ -127,13 +116,11 @@ def append_license_to_sheet(license_key, username):
     sheet.append_row([license_key, "", username, now_str])
     logger.info(f"Лицензия {license_key} добавлена для {username}")
 
-# --- Клавиатура ---
-
+# --- Клавиатура Telegram ---
 def get_keyboard(buttons):
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
 
 # --- Обработчики Telegram ---
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "👋 *Добро пожаловать в Valture!*\n\n"
@@ -193,43 +180,39 @@ async def pay_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    user = query.from_user
+    # Создаем платеж в YooKassa
+    amount_value = "1000.00"  # Сумма
+    payment = Payment.create({
+        "amount": {
+            "value": amount_value,
+            "currency": "RUB"
+        },
+        "confirmation": {
+            "type": "redirect",
+            "return_url": "https://t.me/valture_support_bot"  # Можно заменить на нужный URL
+        },
+        "capture": True,
+        "description": "Покупка лицензии Valture",
+        "metadata": {
+            "username": query.from_user.username or str(query.from_user.id)
+        }
+    }, uuid=secrets.token_hex(16))
 
-    try:
-        payment = Payment.create({
-            "amount": {
-                "value": "1000.00",
-                "currency": "RUB"
-            },
-            "confirmation": {
-                "type": "redirect",
-                "return_url": "https://t.me/valture_support_bot"  # Замени на нужный URL возврата после оплаты
-            },
-            "capture": True,
-            "description": f"Оплата лицензии Valture для пользователя {user.username or user.id}",
-            "metadata": {
-                "username": user.username or str(user.id)
-            }
-        }, idempotence_key=secrets.token_hex(16))
-
-        pay_url = payment.confirmation.confirmation_url
-        await query.edit_message_text(f"Перейдите по ссылке для оплаты:\n{pay_url}", disable_web_page_preview=True)
-
-    except Exception as e:
-        logger.error(f"Ошибка при создании платежа: {e}")
-        await query.edit_message_text(f"Ошибка при создании платежа. Попробуйте позже.")
+    pay_url = payment.confirmation.confirmation_url
+    await query.edit_message_text(f"Перейдите по ссылке для оплаты:\n{pay_url}", disable_web_page_preview=True)
 
 async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
         "❓ *Часто задаваемые вопросы*\n\n"
-        "Q: Что делать, если не приходит лицензионный ключ?\n"
-        "A: Проверьте, что вы оплатили через официальный бот, и дождитесь подтверждения.\n\n"
-        "Q: Можно ли использовать ключ на нескольких устройствах?\n"
-        "A: Нет, ключ привязан к одному пользователю.\n\n"
-        "Q: Как связаться с поддержкой?\n"
-        "A: Используйте кнопку 'Поддержка' в главном меню."
+        "Q: Что делать, если не пришёл лицензионный ключ?\n"
+        "A: Проверьте, что вы оплатили через официальный сервис. Если проблема сохраняется, свяжитесь с поддержкой.\n\n"
+        "Q: Можно ли использовать лицензию на нескольких устройствах?\n"
+        "A: Нет, лицензия привязана к одному устройству.\n\n"
+        "Q: Как активировать лицензию?\n"
+        "A: Введите полученный ключ в вашем приложении Valture.\n\n"
+        "Если есть другие вопросы — пишите в поддержку."
     )
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -238,9 +221,11 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     text = (
-        "📞 *Поддержка*\n\n"
-        "Если у вас возникли вопросы или проблемы, напишите нам:\n"
-        "@valture_support_bot"
+        "📞 *Поддержка Valture*\n\n"
+        "Если у вас возникли вопросы или проблемы, вы можете обратиться к нашей поддержке:\n"
+        "Telegram: @valture_support_bot\n"
+        "Email: support@valture.com\n\n"
+        "Мы всегда готовы помочь!"
     )
     buttons = [("🔙 Назад", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -262,23 +247,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "menu_support":
         await support(update, context)
     else:
-        await query.answer("Неизвестная команда", show_alert=True)
+        await query.answer("Неизвестная команда")
 
-# --- Запуск бота и Flask параллельно ---
-
-async def main():
+# --- Запуск ---
+def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
 
     # Запускаем Flask в отдельном потоке
-    thread = Thread(target=run_flask, daemon=True)
-    thread.start()
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
 
     logger.info("Бот запущен!")
-    await application.run_polling()
+    application.run_polling()
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
