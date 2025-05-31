@@ -13,18 +13,18 @@ invoices = {}
 @bot.message_handler(commands=['start'])
 def welcome(message):
     markup = types.InlineKeyboardMarkup()
-    get_button = types.InlineKeyboardButton(text="Оплатить", callback_data='get_0.1')
+    get_button = types.InlineKeyboardButton(text="Оплатить", callback_data='get_0.01')
     markup.add(get_button)
     bot.send_message(message.chat.id, "Добро пожаловать! Нажмите кнопку ниже, чтобы купить данный товар.", reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: call.data == 'get_0.1')
+@bot.callback_query_handler(func=lambda call: call.data == 'get_0.01')
 def get_invoice(call):
     chat_id = call.message.chat.id
-    pay_link, invoice_id = get_pay_link('0.1')
+    pay_link, invoice_id = get_pay_link('0.01')
     if pay_link and invoice_id:
         invoices[chat_id] = invoice_id 
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton(text="Оплатить 0.1$", url=pay_link))
+        markup.add(types.InlineKeyboardButton(text="Оплатить 0.01 TON", url=pay_link))
         markup.add(types.InlineKeyboardButton(text="Проверить оплату", callback_data=f'check_payment_{invoice_id}'))
         bot.send_message(chat_id, "Перейдите по этой ссылке для оплаты и нажмите 'Проверить оплату'", reply_markup=markup)
     else:
@@ -61,7 +61,11 @@ def check_payment(call):
 
 def get_pay_link(amount):
     headers = {"Crypto-Pay-API-Token": API_TOKEN}
-    data = {"asset": "USDT", "amount": amount}
+    data = {
+        "asset": "TON",
+        "amount": amount,
+        "description": "Valture License"
+    }
     response = requests.post('https://pay.crypt.bot/api/createInvoice', headers=headers, json=data)
     if response.ok:
         response_data = response.json()
