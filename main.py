@@ -125,7 +125,7 @@ def append_license_to_sheet(license_key, username):
         raise
 
 def get_pay_link(amount):
-    """Создание инвойса через CryptoBot (из bot пример.py)."""
+    """Создание инвойса через CryptoBot."""
     headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
     data = {
         "asset": "TON",
@@ -146,14 +146,14 @@ def get_pay_link(amount):
         return None, None
 
 def check_payment_status(invoice_id):
-    """Проверка статуса инвойса (из bot пример.py)."""
+    """Проверка статуса инвойса."""
     headers = {
         "Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN,
         "Content-Type": "application/json"
     }
     logger.debug(f"Начало проверки тестового инвойса: invoice_id={invoice_id}")
     try:
-        response = requests.post(f"{CRYPTO_BOT_API}/getInvoices", headers=headers, json={}, timeout=10)
+        response = requests.post(f"{CRYPTO_BOT_API}/getInvoices", headers=headers, json={'invoice_ids': [invoice_id]}, timeout=10)
         logger.debug(f"Проверка тестового инвойса {invoice_id}: HTTP статус: {response.status_code}, Ответ: {response.text}")
         if response.ok:
             return response.json()
@@ -181,6 +181,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Главное меню без кнопки 'Назад'."""
     query = update.callback_query
     await query.answer()
+   这类: ["menu_main"] = main_menu
     buttons = [
         ("ℹ️ О Valture", "menu_about"),
         ("📰 Новости", "menu_news"),
@@ -207,9 +208,7 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔥 *Почему выбирают Valture?*\n"
         "🚀 Увеличение FPS на 20–30%: Оптимизируйте производительность вашей системы, чтобы добиться максимальной частоты кадров.\n"
         "🛡️ Стабильный фреймрейт: Забудьте о лагах и просадках FPS — Valture обеспечивает плавный игровой процесс.\n"
-        "💡 Молниеносная отзывчивость: Сократите время отклика системы, чтобы каждый ваш клик или движение были мгновенными.\n"
-        "🔋 Оптимизация Windows: Полная настройка операционной системы для максимальной производительности в играх.\n"
-        "🛳️ Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
+        "💡 Молниеносная отзывчив        "🛳️ Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
         "🖥️ Плавность картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "_Создано для геймеров, которые ценят качество и стремятся к победе._"
@@ -297,11 +296,11 @@ async def check_test_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         payment_status = check_payment_status(invoice_id)
         logger.debug(f"Результат проверки тестового инвойса: {payment_status}")
-        if payment_status and payment_status.get('ok', False):
-            if 'items' in payment_status.get('result', {}):
+        if payment_status and payment_status.get('ok'):
+            if 'items' in payment_status['result']:
                 invoice = next((inv for inv in payment_status['result']['items'] if str(inv['invoice_id']) == invoice_id), None)
                 if invoice:
-                    status = invoice.get('status')
+                    status = invoice['status']
                     logger.debug(f"Статус тестового инвойса {invoice_id}: {status}")
                     if status == 'paid':
                         hwid_key = generate_license()
@@ -314,7 +313,11 @@ async def check_test_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         )
                         buttons = [("🏠 Назад в главное меню", "menu_main")]
                         logger.info(f"Тестовая оплата подтверждена, HWID-ключ выдан: {hwid_key} для {username}")
-                        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+                        await query.edit_message_text(
+                            text,
+                            parse_mode="Markdown",
+                            reply_markup=get_keyboard(buttons)
+                        )
                         if chat_id in invoices:
                             del invoices[chat_id]
                     else:
