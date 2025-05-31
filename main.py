@@ -153,7 +153,7 @@ def check_payment_status(invoice_id):
     }
     logger.debug(f"Начало проверки тестового инвойса: invoice_id={invoice_id}")
     try:
-        response = requests.post(f"{CRYPTO_BOT_API}/getInvoices", headers=headers, json={'invoice_ids': [invoice_id]}, timeout=10)
+        response = requests.post(f"{CRYPTO_BOT_API}/getInvoices", headers=headers, json={}, timeout=10)
         logger.debug(f"Проверка тестового инвойса {invoice_id}: HTTP статус: {response.status_code}, Ответ: {response.text}")
         if response.ok:
             return response.json()
