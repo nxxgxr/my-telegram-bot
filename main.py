@@ -53,7 +53,7 @@ def setup_google_creds():
                 f.write(creds_json)
             logger.info("Google credentials успешно декодированы и сохранены во временный файл")
         except Exception as e:
-            logger.error(f"Ошибка при декодировании Google credentials: {e}")
+            logger.error(f"Ошибка при декодировании Google credentials: {str(e)}", exc_info=True)
             raise
     elif not os.path.exists(CREDS_FILE):
         logger.error("Файл Google credentials не найден, и GOOGLE_CREDS_JSON_BASE64 не задан")
@@ -72,7 +72,7 @@ def get_sheet():
             sheet_cache = client.open(SPREADSHEET_NAME).sheet1
             logger.info("Успешно подключено к Google Sheets")
         except Exception as e:
-            logger.error(f"Ошибка подключения к Google Sheets: {e}")
+            logger.error(f"Ошибка подключения к Google Sheets: {str(e)}", exc_info=True)
             raise
     return sheet_cache
 
@@ -83,7 +83,7 @@ def generate_license(length=32):
         logger.info(f"Сгенерирован HWID-ключ: {key}")
         return key
     except Exception as e:
-        logger.error(f"Ошибка при генерации ключа: {e}")
+        logger.error(f"Ошибка при генерации ключа: {str(e)}", exc_info=True)
         raise
 
 def append_license_to_sheet(license_key, username):
@@ -96,7 +96,7 @@ def append_license_to_sheet(license_key, username):
         sheet.append_row([license_key, "", username, now_str])
         logger.info(f"HWID-ключ {license_key} добавлен для {username}")
     except Exception as e:
-        logger.error(f"Ошибка при добавлении HWID-ключа: {e}")
+        logger.error(f"Ошибка при добавлении HWID-ключа: {str(e)}", exc_info=True)
         raise
 
 # --- Логика бота ---
@@ -132,38 +132,48 @@ def check_payment(call):
     username = call.from_user.username or call.from_user.first_name
 
     logger.debug(f"Начало проверки тестовой оплаты: chat_id={chat_id}, invoice_id={invoice_id}, username={username}")
-    payment_status = check_payment_status(invoice_id)
-    logger.debug(f"Результат проверки тестового инвойса: {payment_status}")
-    if payment_status and payment_status.get('ok'):
-        if 'items' in payment_status['result']:
-            invoice = next((inv for inv in payment_status['result']['items'] if str(inv['invoice_id']) == invoice_id), None)
-            if invoice:
-                status = invoice['status']
-                logger.debug(f"Статус тестового инвойса {invoice_id}: {status}")
-                if status == 'paid':
-                    try:
-                        hwid_key = generate_license()
-                        append_license_to_sheet(hwid_key, username)
-                        bot.send_message(chat_id, f"Оплата прошла успешно!✅\n\nВаш HWID-ключ:\n`{hwid_key}`\n\nСохраните его в надежном месте! 🚀", parse_mode="Markdown")
-                        logger.info(f"Тестовая оплата подтверждена, HWID-ключ выдан: {hwid_key} для {username}")
-                        if chat_id in invoices:
-                            del invoices[chat_id]
-                        bot.answer_callback_query(call.id)
-                    except Exception as e:
-                        logger.error(f"Ошибка при генерации ключа или записи в Google Sheets: {e}", exc_info=True)
-                        bot.answer_callback_query(call.id, 'Ошибка: Не удалось сгенерировать ключ или записать в таблицу.', show_alert=True)
+    try:
+        payment_status = check_payment_status(invoice_id)
+        logger.debug(f"Результат проверки тестового инвойса: {payment_status}")
+        if payment_status and payment_status.get('ok'):
+            if 'items' in payment_status['result']:
+                invoice = next((inv for inv in payment_status['result']['items'] if str(inv['invoice_id']) == invoice_id), None)
+                if invoice:
+                    status = invoice['status']
+                    logger.debug(f"Статус тестового инвойса {invoice_id}: {status}")
+                    if status == 'paid':
+                        try:
+                            hwid_key = generate_license()
+                            try:
+                                append_license_to_sheet(hwid_key, username)
+                                logger.info(f"Успешно записан HWID-ключ {hwid_key} в Google Sheets для {username}")
+                            except Exception as sheet_error:
+                                logger.error(f"Не удалось записать HWID-ключ в Google Sheets: {str(sheet_error)}", exc_info=True)
+                                bot.send_message(chat_id, f"Оплата прошла успешно!✅\n\nВаш HWID-ключ:\n`{hwid_key}`\n\nСохраните его в надежном месте! 🚀\n\n⚠️ Внимание: Не удалось записать ключ в таблицу. Свяжитесь с @s3pt1ck.", parse_mode="Markdown")
+                            else:
+                                bot.send_message(chat_id, f"Оплата прошла успешно!✅\n\nВаш HWID-ключ:\n`{hwid_key}`\n\nСохраните его в надежном месте! 🚀", parse_mode="Markdown")
+                            logger.info(f"Тестовая оплата подтверждена, HWID-ключ выдан: {hwid_key} для {username}")
+                            if chat_id in invoices:
+                                del invoices[chat_id]
+                            bot.answer_callback_query(call.id)
+                        except Exception as key_error:
+                            logger.error(f"Ошибка при генерации HWID-ключа: {str(key_error)}", exc_info=True)
+                            bot.answer_callback_query(call.id, 'Ошибка: Не удалось сгенерировать HWID-ключ.', show_alert=True)
+                    else:
+                        logger.warning(f"Тестовая оплата не подтверждена: invoice_id={invoice_id}, статус: {status}")
+                        bot.answer_callback_query(call.id, 'Оплата не найдена❌', show_alert=True)
                 else:
-                    logger.warning(f"Тестовая оплата не подтверждена: invoice_id={invoice_id}, статус: {status}")
-                    bot.answer_callback_query(call.id, 'Оплата не найдена❌', show_alert=True)
+                    logger.error(f"Тестовый счет не найден для invoice_id={invoice_id}")
+                    bot.answer_callback_query(call.id, 'Счет не найден.', show_alert=True)
             else:
-                logger.error(f"Тестовый счет не найден для invoice_id={invoice_id}")
-                bot.answer_callback_query(call.id, 'Счет не найден.', show_alert=True)
+                logger.error(f"Ответ API не содержит ключа 'items': {payment_status}")
+                bot.answer_callback_query(call.id, 'Ошибка при получении статуса оплаты.', show_alert=True)
         else:
-            logger.error(f"Ответ API не содержит ключа 'items': {payment_status}")
+            logger.error(f"Ошибка API или неверный ответ: {payment_status}")
             bot.answer_callback_query(call.id, 'Ошибка при получении статуса оплаты.', show_alert=True)
-    else:
-        logger.error(f"Ошибка API или неверный ответ: {payment_status}")
-        bot.answer_callback_query(call.id, 'Ошибка при получении статуса оплаты.', show_alert=True)
+    except Exception as e:
+        logger.error(f"Критическая ошибка при проверке оплаты: {str(e)}", exc_info=True)
+        bot.answer_callback_query(call.id, 'Критическая ошибка при проверке оплаты.', show_alert=True)
 
 def get_pay_link(amount):
     """Создание инвойса через CryptoBot."""
