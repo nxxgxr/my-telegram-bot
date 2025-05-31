@@ -22,6 +22,7 @@ CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN")
 CREDS_FILE = os.environ.get("CREDS_FILE")
 SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME")
 GOOGLE_CREDS_JSON_BASE64 = os.environ.get("GOOGLE_CREDS_JSON_BASE64")
+PAYMENT_AMOUNT = 0.01  # Цена в TON, изменить здесь для настройки
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
@@ -259,10 +260,10 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Меню оплаты."""
     query = update.callback_query
     await query.answer()
-    buttons = [("💳 Оплатить 4 TON", "get_payment")]
+    buttons = [(f"💳 Оплатить {PAYMENT_AMOUNT} TON", "get_payment")]
     await query.edit_message_text(
-        "💳 *Покупка лицензии Valture*\n\n"
-        "Нажмите кнопку ниже, чтобы оплатить 4 TON за лицензию.",
+        f"💳 *Покупка лицензии Valture*\n\n"
+        f"Нажмите кнопку ниже, чтобы оплатить {PAYMENT_AMOUNT} TON за лицензию.",
         parse_mode="Markdown",
         reply_markup=get_keyboard(buttons)
     )
@@ -276,7 +277,7 @@ async def get_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = query.from_user.username or query.from_user.full_name
 
     try:
-        invoice, error = create_crypto_invoice(amount=4.0, asset="TON", description="Valture License")
+        invoice, error = create_crypto_invoice(amount=PAYMENT_AMOUNT, asset="TON", description="Valture License")
         if not invoice:
             error_msg = (
                 "❌ *Не удалось создать счет на оплату!*\n\n"
@@ -296,8 +297,8 @@ async def get_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Инвойс создан для {username}: invoice_id={invoice_id}")
 
         text = (
-            "💸 *Оплатите через CryptoBot*\n\n"
-            f"Нажмите ниже для оплаты *4 TON*:\n"
+            f"💸 *Оплатите через CryptoBot*\n\n"
+            f"Нажмите ниже для оплаты *{PAYMENT_AMOUNT} TON*:\n"
             f"[Оплатить через CryptoBot]({pay_url})\n\n"
             "После оплаты нажмите 'Проверить оплату'."
         )
