@@ -129,8 +129,9 @@ def get_pay_link(amount):
         response = requests.post(f"{CRYPTO_BOT_API}/createInvoice", headers=headers, json=data, timeout=10)
         if response.ok:
             response_data = response.json()
+            logger.debug(f"Invoice created: {response_data}")
             return response_data['result']['pay_url'], response_data['result']['invoice_id']
-        logger.error(f"Failed to create invoice: {response.text}")
+        logger.error(f"Failed to create invoice: {response.status_code}, {response.text}")
         return None, None
     except Exception as e:
         logger.error(f"Error creating invoice: {e}")
@@ -144,6 +145,7 @@ def check_payment_status(invoice_id):
     }
     try:
         response = requests.post(f"{CRYPTO_BOT_API}/getInvoices", headers=headers, json={}, timeout=10)
+        logger.debug(f"Payment status response: {response.text}")
         if response.ok:
             return response.json()
         logger.error(f"Error checking payment status: {response.status_code}, {response.text}")
@@ -233,10 +235,11 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = query.from_user.username or query.from_user.full_name
 
     try:
-        pay_link, invoice_id = get_pay_link('0.01')
+        pay_link, invoice_id = get_pay_link('4.0')
         if pay_link and invoice_id:
-            context.user_data["invoice_id"] = invoice_id
+            context.user_data["invoice_id"] = str(invoice_id)  # Ensure invoice_id is stored as string
             context.user_data["username"] = username
+            context.user_data["chat_id"] = chat_id
             logger.info(f"CryptoBot invoice created: invoice_id={invoice_id}, pay_url={pay_link}")
             text = (
                 "💸 *Оплатите через CryptoBot*\n\n"
@@ -280,17 +283,32 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check CryptoBot payment status."""
     query = update.callback_query
     await query.answer()
-    chat_id = query.message.chat_id
+    chat_id = context.user_data.get("chat_id", query.message.chat_id)
     invoice_id = query.data.split('check_payment_')[1]
     username = context.user_data.get("username")
 
+    if not username:
+        logger.error("Username missing in context.user_data")
+        text = (
+            "❌ *Ошибка!*\n\n"
+            "Не удалось найти данные пользователя. Попробуйте начать заново или свяжитесь с @s3pt1ck."
+        )
+        buttons = [
+            ("🔄 Попробовать снова", "pay_crypto"),
+            ("🔙 Назад к способам оплаты", "menu_pay")
+        ]
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+        return
+
     try:
         payment_status = check_payment_status(invoice_id)
+        logger.debug(f"Checking payment for invoice_id={invoice_id}, response: {payment_status}")
         if payment_status and payment_status.get('ok'):
-            if 'items' in payment_status['result']:
-                invoice = next((inv for inv in payment_status['result']['items'] if str(inv['invoice_id']) == invoice_id), None)
+            if 'items' in payment_status['result'] and payment_status['result']['items']:
+                invoice = next((inv for inv in payment_status['result']['items'] if str(inv['invoice_id']) == str(invoice_id)), None)
                 if invoice:
                     status = invoice['status']
+                    logger.debug(f"Invoice {invoice_id} status: {status}")
                     if status == 'paid':
                         license_key = generate_license()
                         append_license_to_sheet(license_key, username)
@@ -318,25 +336,31 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             )
                         context.user_data.clear()
                     else:
-                        await query.edit_message_text(
+                        logger.warning(f"Payment not confirmed for invoice_id={invoice_id}, status={status}")
+                        text = (
                             "⏳ *Оплата еще не подтверждена*\n\n"
-                            "Завершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck, если нужна помощь.",
+                            "Завершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck, если нужна помощь."
+                        )
+                        buttons = [
+                            ("🔄 Проверить снова", f"check_payment_{invoice_id}"),
+                            ("🔙 Назад к способам оплаты", "menu_pay")
+                        ]
+                        await query.edit_message_text(
+                            text,
                             parse_mode="Markdown",
-                            reply_markup=get_keyboard([
-                                ("🔄 Проверить снова", f"check_payment_{invoice_id}"),
-                                ("🔙 Назад к способам оплаты", "menu_pay")
-                            ])
+                            reply_markup=get_keyboard(buttons)
                         )
                 else:
+                    logger.error(f"Invoice {invoice_id} not found in API response")
                     await query.answer("Счет не найден.", show_alert=True)
             else:
-                logger.error(f"API response missing 'items': {payment_status}")
-                await query.answer("Ошибка при получении статуса оплаты.", show_alert=True)
+                logger.error(f"API response missing 'items' or empty: {payment_status}")
+                await query.answer("Ошибка: Ответ от API не содержит данных об оплате.", show_alert=True)
         else:
-            logger.error(f"Error checking payment status: {payment_status}")
+            logger.error(f"Invalid API response: {payment_status}")
             await query.answer("Ошибка при получении статуса оплаты.", show_alert=True)
     except Exception as e:
-        logger.error(f"Error verifying payment: {e}", exc_info=True)
+        logger.error(f"Error verifying payment for invoice_id={invoice_id}: {e}", exc_info=True)
         text = (
             "❌ *Что-то пошло не так!*\n\n"
             "Не удалось проверить оплату. Попробуйте снова или свяжитесь с @s3pt1ck."
