@@ -9,6 +9,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import logging
 import time
+import json
 
 # --- Настройки ---
 TOKEN = os.environ.get("BOT_TOKEN", '7941872387:AAGZayILmna-qHHyQy5V50wDGylo3yFCZ0A')
@@ -48,15 +49,21 @@ def setup_google_creds():
         try:
             # Добавляем padding, если отсутствует
             padded_base64 = GOOGLE_CREDS_JSON_BASE64.strip() + '=' * (-len(GOOGLE_CREDS_JSON_BASE64.strip()) % 4)
-            creds_json = base64.b64decode(padded_base64).decode("utf-8")
-            with open(CREDS_FILE, "w") as f:
-                f.write(creds_json)
+            # Декодируем base64 в байты
+            creds_bytes = base64.b64decode(padded_base64, validate=True)
+            # Проверяем, является ли результат валидным JSON
+            creds_json = json.loads(creds_bytes.decode('utf-8', errors='strict'))
+            with open(CREDS_FILE, "w", encoding='utf-8') as f:
+                json.dump(creds_json, f, ensure_ascii=False)
             logger.info("Google credentials декодированы и сохранены")
         except base64.binascii.Error as e:
             logger.error(f"Ошибка base64: {str(e)}")
             raise
         except UnicodeDecodeError as e:
             logger.error(f"Ошибка UTF-8: {str(e)}")
+            raise
+        except json.JSONDecodeError as e:
+            logger.error(f"Ошибка парсинга JSON: {str(e)}")
             raise
         except Exception as e:
             logger.error(f"Неизвестная ошибка декодирования: {str(e)}")
