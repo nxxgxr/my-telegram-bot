@@ -18,8 +18,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 # --- Настройки ---
 # Цены и ссылка на приложение
-CRYPTO_AMOUNT = 4.0  # TON для CryptoBot
-YOOKASSA_AMOUNT = 1000.0  # RUB для YooKassa
+CRYPTO_AMOUNT = 1  # TON для CryptoBot
+YOOKASSA_AMOUNT = 1.0  # RUB для YooKassa
 APP_DOWNLOAD_URL = "https://www.dropbox.com/scl/fi/ze5ebd909z2qeaaucn56q/VALTURE.exe?rlkey=ihdzk8voej4oikrdhq0wfzvbb&st=7lufvad0&dl=1"
 
 TOKEN = os.environ.get("BOT_TOKEN", 'YOUR_BOT_TOKEN')
