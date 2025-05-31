@@ -13,16 +13,22 @@ from flask import Flask, request, jsonify
 from threading import Thread
 from uuid import uuid4
 from yookassa import Configuration, Payment
+import sqlite3
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # --- Настройки ---
-TOKEN = os.environ.get("BOT_TOKEN", '7941872387:AAGZayILmna-qHHyQy5V50wDGylo3yFCZ0A')
-CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN", '406690:AA0uW0MoZHwZ1CnAvw1zn3lcx7lNKnbT24w')
+# Цены и ссылка на приложение
+CRYPTO_AMOUNT = 4.0  # TON для CryptoBot
+YOOKASSA_AMOUNT = 1000.0  # RUB для YooKassa
+APP_DOWNLOAD_URL = "https://www.dropbox.com/scl/fi/ze5ebd909z2qeaaucn56q/VALTURE.exe?rlkey=ihdzk8voej4oikrdhq0wfzvbb&st=7lufvad0&dl=1"
+
+TOKEN = os.environ.get("BOT_TOKEN", 'YOUR_BOT_TOKEN')
+CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN", 'YOUR_CRYPTOBOT_TOKEN')
 YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID")
 YOOKASSA_SECRET_KEY = os.environ.get("YOOKASSA_SECRET_KEY")
 CREDS_FILE = os.environ.get("CREDS_FILE", "valture-license-bot-account.json")
 SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME", "Valture_Licenses")
-TEST_PAYMENT_AMOUNT = 0.1  # TON for CryptoBot
-YOOKASSA_AMOUNT = 1.0  # RUB for YooKassa
+TEST_PAYMENT_AMOUNT = 0.1  # TON для тестовых платежей CryptoBot
 
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -43,6 +49,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# --- Инициализация SQLite ---
+def init_db():
+    conn = sqlite3.connect('transactions.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS transactions (
+            payment_id TEXT PRIMARY KEY,
+            user_id TEXT,
+            username TEXT,
+            license_key TEXT,
+            timestamp TEXT,
+            payment_type TEXT,
+            status TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
 # --- Flask для keep-alive и вебхуков ---
 app = Flask(__name__)
 
@@ -62,34 +88,60 @@ def yookassa_webhook():
 
         event = event_json['event']
         payment_object = event_json['object']
+        payment_id = payment_object['id']
         
+        # Проверка, был ли платеж уже обработан
+        conn = sqlite3.connect('transactions.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM transactions WHERE payment_id = ?", (payment_id,))
+        result = cursor.fetchone()
+        if result:
+            logger.warning(f"Payment {payment_id} already processed with status: {result[0]}")
+            conn.close()
+            return jsonify({"status": "ignored", "message": "Payment already processed"}), 200
+
         if event == 'payment.succeeded':
-            payment_id = payment_object['id']
             metadata = payment_object.get('metadata', {})
             user_id = metadata.get('user_id')
             username = metadata.get('username')
             
             if not user_id or not username:
                 logger.error(f"Missing metadata: user_id={user_id}, username={username}")
+                conn.close()
                 return jsonify({"status": "error", "message": "Missing metadata"}), 400
 
             try:
                 license_key = generate_license()
-                append_license_to_sheet(license_key, username)
+                sheet_success = append_license_to_sheet(license_key, username)
+                
+                # Сохраняем транзакцию в базе
+                cursor.execute('''
+                    INSERT INTO transactions (payment_id, user_id, username, license_key, timestamp, payment_type, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (payment_id, user_id, username, license_key, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'yookassa', 'succeeded'))
+                conn.commit()
+                
                 bot.send_message(
                     chat_id=user_id,
                     text=(
                         "🎉 *Поздравляем с покупкой!*\n\n"
                         f"Ваш лицензионный ключ:\n`{license_key}`\n\n"
-                        "Сохраните его! 🚀"
+                        f"Скачать приложение Valture:\n[VALTURE.exe]({APP_DOWNLOAD_URL})\n\n"
+                        "Сохраните ключ и скачайте приложение! 🚀"
                     ),
-                    parse_mode="Markdown"
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
                 )
-                logger.info(f"YooKassa payment processed via webhook: {license_key} for {username}")
+                logger.info(f"YooKassa payment processed: {license_key} for {username}")
                 if user_id in invoices and invoices[user_id]['payment_type'] == 'yookassa':
                     del invoices[user_id]
             except Exception as e:
                 logger.error(f"Error processing YooKassa payment {payment_id}: {e}")
+                cursor.execute('''
+                    INSERT INTO transactions (payment_id, user_id, username, timestamp, payment_type, status)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (payment_id, user_id, username, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'yookassa', 'failed'))
+                conn.commit()
                 bot.send_message(
                     chat_id=user_id,
                     text=(
@@ -98,12 +150,20 @@ def yookassa_webhook():
                     ),
                     parse_mode="Markdown"
                 )
+            conn.close()
             return jsonify({"status": "ok"}), 200
         
         elif event == 'payment.canceled':
-            logger.warning(f"YooKassa payment canceled: {payment_object['id']}")
+            logger.warning(f"YooKassa payment canceled: {payment_id}")
+            cursor.execute('''
+                INSERT INTO transactions (payment_id, user_id, username, timestamp, payment_type, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (payment_id, user_id or '', username or '', datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'yookassa', 'canceled'))
+            conn.commit()
+            conn.close()
             return jsonify({"status": "ok"}), 200
         
+        conn.close()
         return jsonify({"status": "ignored"}), 200
     
     except Exception as e:
@@ -116,11 +176,25 @@ def run_flask():
 
 # --- Инициализация бота ---
 bot = telebot.TeleBot(TOKEN)
-
 invoices = {}
 sheet_cache = None
 
-# --- Обработка Google Credentials ---
+# --- Очистка устаревших invoices ---
+def clean_old_invoices():
+    current_time = time.time()
+    expired = []
+    for user_id, invoice in invoices.items():
+        if current_time - invoice.get('created_at', current_time) > 1800:  # 30 минут
+            expired.append(user_id)
+    for user_id in expired:
+        del invoices[user_id]
+    logger.debug(f"Очищено {len(expired)} устаревших инвойсов")
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(clean_old_invoices, 'interval', minutes=10)
+scheduler.start()
+
+# --- Обработка Google Sheets ---
 def setup_google_creds():
     logger.debug("Проверка Google credentials...")
     if not os.path.exists(CREDS_FILE):
@@ -171,6 +245,7 @@ def append_license_to_sheet(license_key, username, retries=3, delay=2):
     logger.error(f"Не удалось добавить ключ {license_key} после {retries} попыток")
     return False
 
+# --- Платежные функции ---
 def create_crypto_invoice(amount, asset="TON", description="Valture License"):
     logger.debug(f"Создание инвойса: amount={amount}, asset={asset}")
     if not CRYPTOBOT_API_TOKEN:
@@ -315,21 +390,22 @@ def button_handler(call):
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data='menu_main'))
         bot.edit_message_text(
-"✨ *Valture — Ваш путь к совершенству в играх*\n\n"
-        "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        "Valture — это передовой инструмент, созданный для геймеров, которые не готовы мириться с компромиссами. "
-        "Наша миссия — вывести вашу игровую производительность на новый уровень, обеспечив максимальную плавность, "
-        "стабильность и отзывчивость системы. С Valture вы получите конкурентное преимущество, о котором всегда мечтали.\n\n"
-        "🔥 *Почему выбирают Valture?*\n"
-        "🚀 Увеличение FPS на 20–30%: Оптимизируйте производительность вашей системы, чтобы добиться максимальной частоты кадров.\n"
-        "🛡️ Стабильный фреймрейт: Забудьте о лагах и просадках FPS — Valture обеспечивает плавный игровой процесс.\n"
-        "💡 Молниеносная отзывчивость: Сократите время отклика системы, чтобы каждый ваш клик или движение были мгновенными.\n"
-        "🔋 Оптимизация Windows: Полная настройка операционной системы для максимальной производительности в играх.\n"
-        "🛳️  Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
-        "🖥️  Плавность картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
-        "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        "_Создано для геймеров, которые ценят качество и стремятся к победе._"
-    )
+            (
+                "✨ *Valture — Ваш путь к совершенству в играх*\n\n"
+                "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
+                "Valture — это передовой инструмент, созданный для геймеров, которые не готовы мириться с компромиссами. "
+                "Наша миссия — вывести вашу игровую производительность на новый уровень, обеспечив максимальную плавность, "
+                "стабильность и отзывчивость системы. С Valture вы получите конкурентное преимущество, о котором всегда мечтали.\n\n"
+                "🔥 *Почему выбирают Valture?*\n"
+                "🚀 Увеличение FPS на 20–30%: Оптимизируйте производительность вашей системы, чтобы добиться максимальной частоты кадров.\n"
+                "🛡️ Стабильный фреймрейт: Забудьте о лагах и просадках FPS — Valture обеспечивает плавный игровой процесс.\n"
+                "💡 Молниеносная отзывчивость: Сократите время отклика системы, чтобы каждый ваш клик или движение были мгновенными.\n"
+                "🔋 Оптимизация Windows: Полная настройка операционной системы для максимальной производительности в играх.\n"
+                "🛳️ Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
+                "🖥️ Плавность картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
+                "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
+                "_Создано для геймеров, которые ценят качество и стремятся к победе._"
+            ),
             chat_id=chat_id,
             message_id=message_id,
             parse_mode="Markdown",
@@ -343,12 +419,12 @@ def button_handler(call):
         markup.add(types.InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data='menu_main'))
         bot.edit_message_text(
             (
-                "💳 *Покупка лицензии Valture*\n\n"
-                "Цена: *4 TON* или *1000 RUB (~$12.7)*\n"
+                f"💳 *Покупка лицензии Valture*\n\n"
+                f"Цена: *{CRYPTO_AMOUNT} TON* или *{YOOKASSA_AMOUNT} RUB (~$12.7)*\n"
                 "Выберите способ оплаты:\n"
                 "- *CryptoBot*: Оплата через криптовалюту.\n"
                 "- *YooKassa*: Оплата картой.\n\n"
-                "Ключ будет отправлен после оплаты."
+                "Ключ и ссылка на приложение будут отправлены после оплаты."
             ),
             chat_id=chat_id,
             message_id=message_id,
@@ -362,8 +438,8 @@ def button_handler(call):
         markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
         bot.edit_message_text(
             (
-                "💸 *Подтверждение оплаты CryptoBot*\n\n"
-                "Вы собираетесь оплатить *4 TON* за лицензию Valture.\n"
+                f"💸 *Подтверждение оплаты CryptoBot*\n\n"
+                f"Вы собираетесь оплатить *{CRYPTO_AMOUNT} TON* за лицензию Valture.\n"
                 "Продолжить оплату?"
             ),
             chat_id=chat_id,
@@ -374,7 +450,7 @@ def button_handler(call):
 
     elif data == "pay_crypto_confirm":
         try:
-            invoice, error = create_crypto_invoice(amount=TEST_PAYMENT_AMOUNT)
+            invoice, error = create_crypto_invoice(amount=CRYPTO_AMOUNT)
             if not invoice:
                 markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton(text="🔄 Попробовать снова", callback_data='pay_crypto'))
@@ -394,17 +470,32 @@ def button_handler(call):
 
             invoice_id = invoice["invoice_id"]
             pay_url = invoice["pay_url"]
-            invoices[chat_id] = {'invoice_id': invoice_id, 'username': username, 'payment_type': 'crypto'}
+            invoices[chat_id] = {
+                'invoice_id': invoice_id,
+                'username': username,
+                'payment_type': 'crypto',
+                'created_at': time.time()
+            }
             logger.info(f"Инвойс создан: invoice_id={invoice_id}, pay_url={pay_url}")
 
+            # Сохраняем инвойс в базе
+            conn = sqlite3.connect('transactions.db')
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO transactions (payment_id, user_id, username, timestamp, payment_type, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (invoice_id, chat_id, username, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'crypto', 'pending'))
+            conn.commit()
+            conn.close()
+
             markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton(text="Оплатить 4 TON", url=pay_url))
+            markup.add(types.InlineKeyboardButton(text=f"Оплатить {CRYPTO_AMOUNT} TON", url=pay_url))
             markup.add(types.InlineKeyboardButton(text="✅ Подтвердить оплату", callback_data='pay_verify'))
             markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
             bot.edit_message_text(
                 (
-                    "💸 *Оплатите через CryptoBot*\n\n"
-                    "Нажмите ниже для оплаты *4 TON*:\n"
+                    f"💸 *Оплатите через CryptoBot*\n\n"
+                    f"Нажмите ниже для оплаты *{CRYPTO_AMOUNT} TON*:\n"
                     f"[Оплатить через CryptoBot]({pay_url})\n\n"
                     "После оплаты подтвердите ниже."
                 ),
@@ -436,8 +527,8 @@ def button_handler(call):
         markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
         bot.edit_message_text(
             (
-                "💳 *Подтверждение оплаты YooKassa*\n\n"
-                "Вы собираетесь оплатить *1000 RUB* за лицензию Valture.\n"
+                f"💳 *Подтверждение оплаты YooKassa*\n\n"
+                f"Вы собираетесь оплатить *{YOOKASSA_AMOUNT} RUB* за лицензию Valture.\n"
                 "Продолжить оплату?"
             ),
             chat_id=chat_id,
@@ -473,17 +564,32 @@ def button_handler(call):
 
             payment_id = payment.id
             confirmation_url = payment.confirmation.confirmation_url
-            invoices[chat_id] = {'payment_id': payment_id, 'username': username, 'payment_type': 'yookassa'}
+            invoices[chat_id] = {
+                'payment_id': payment_id,
+                'username': username,
+                'payment_type': 'yookassa',
+                'created_at': time.time()
+            }
             logger.info(f"YooKassa платеж создан: payment_id={payment_id}")
 
+            # Сохраняем платеж в базе
+            conn = sqlite3.connect('transactions.db')
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO transactions (payment_id, user_id, username, timestamp, payment_type, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (payment_id, chat_id, username, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'yookassa', 'pending'))
+            conn.commit()
+            conn.close()
+
             markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton(text="Оплатить 1000 RUB", url=confirmation_url))
+            markup.add(types.InlineKeyboardButton(text=f"Оплатить {YOOKASSA_AMOUNT} RUB", url=confirmation_url))
             markup.add(types.InlineKeyboardButton(text="✅ Подтвердить оплату", callback_data='pay_verify'))
             markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
             bot.edit_message_text(
                 (
-                    "💳 *Оплатите через YooKassa*\n\n"
-                    "Нажмите ниже для оплаты *1000 RUB*:\n"
+                    f"💳 *Оплатите через YooKassa*\n\n"
+                    f"Нажмите ниже для оплаты *{YOOKASSA_AMOUNT} RUB*:\n"
                     f"[Оплатить через YooKassa]({confirmation_url})\n\n"
                     "После оплаты подтвердите ниже или дождитесь автоматической обработки."
                 ),
@@ -539,36 +645,71 @@ def button_handler(call):
                 reply_markup=markup
             )
 
+            conn = sqlite3.connect('transactions.db')
+            cursor = conn.cursor()
+
             if payment_type == 'crypto':
                 invoice_id = invoices[chat_id]['invoice_id']
                 status = check_invoice_status(invoice_id)
                 if status == "paid":
+                    cursor.execute("SELECT license_key FROM transactions WHERE payment_id = ?", (invoice_id,))
+                    result = cursor.fetchone()
+                    if result and result[0]:
+                        logger.warning(f"Invoice {invoice_id} already processed")
+                        markup = types.InlineKeyboardMarkup()
+                        markup.add(types.InlineKeyboardButton(text="🏠 Назад в главное меню", callback_data='menu_main'))
+                        bot.edit_message_text(
+                            (
+                                "🎉 *Платеж уже обработан!*\n\n"
+                                f"HWID-ключ:\n`{result[0]}`\n\n"
+                                f"Скачать приложение Valture:\n[VALTURE.exe]({APP_DOWNLOAD_URL})\n\n"
+                                "Сохраните ключ и скачайте приложение! 🚀"
+                            ),
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            parse_mode="Markdown",
+                            reply_markup=markup,
+                            disable_web_page_preview=True
+                        )
+                        conn.close()
+                        return
+
                     hwid_key = generate_license()
                     sheet_success = append_license_to_sheet(hwid_key, username)
+                    cursor.execute('''
+                        UPDATE transactions SET license_key = ?, status = ? WHERE payment_id = ?
+                    ''', (hwid_key, 'succeeded', invoice_id))
+                    conn.commit()
                     markup = types.InlineKeyboardMarkup()
                     markup.add(types.InlineKeyboardButton(text="🏠 Назад в главное меню", callback_data='menu_main'))
                     if sheet_success:
                         bot.edit_message_text(
                             (
                                 "🎉 *Поздравляем с покупкой!*\n\n"
-                                f"HWID-ключ:\n`{hwid_key}`\n\nСохраните его! 🚀"
+                                f"HWID-ключ:\n`{hwid_key}`\n\n"
+                                f"Скачать приложение Valture:\n[VALTURE.exe]({APP_DOWNLOAD_URL})\n\n"
+                                "Сохраните ключ и скачайте приложение! 🚀"
                             ),
                             chat_id=chat_id,
                             message_id=message_id,
                             parse_mode="Markdown",
-                            reply_markup=markup
+                            reply_markup=markup,
+                            disable_web_page_preview=True
                         )
                     else:
                         bot.edit_message_text(
                             (
                                 "🎉 *Поздравляем с покупкой!*\n\n"
-                                f"HWID-ключ:\n`{hwid_key}`\n\nСохраните его! 🚀\n\n"
+                                f"HWID-ключ:\n`{hwid_key}`\n\n"
+                                f"Скачать приложение Valture:\n[VALTURE.exe]({APP_DOWNLOAD_URL})\n\n"
+                                "Сохраните ключ и скачайте приложение! 🚀\n\n"
                                 "⚠️ Не удалось записать ключ в таблицу. Свяжитесь с @s3pt1ck."
                             ),
                             chat_id=chat_id,
                             message_id=message_id,
                             parse_mode="Markdown",
-                            reply_markup=markup
+                            reply_markup=markup,
+                            disable_web_page_preview=True
                         )
                     logger.info(f"CryptoBot оплата подтверждена: {hwid_key} для {username}")
                     del invoices[chat_id]
@@ -591,32 +732,64 @@ def button_handler(call):
                 payment_id = invoices[chat_id]['payment_id']
                 status = check_yookassa_payment_status(payment_id)
                 if status == "succeeded":
+                    cursor.execute("SELECT license_key FROM transactions WHERE payment_id = ?", (payment_id,))
+                    result = cursor.fetchone()
+                    if result and result[0]:
+                        logger.warning(f"Payment {payment_id} already processed")
+                        markup = types.InlineKeyboardMarkup()
+                        markup.add(types.InlineKeyboardButton(text="🏠 Назад в главное меню", callback_data='menu_main'))
+                        bot.edit_message_text(
+                            (
+                                "🎉 *Платеж уже обработан!*\n\n"
+                                f"HWID-ключ:\n`{result[0]}`\n\n"
+                                f"Скачать приложение Valture:\n[VALTURE.exe]({APP_DOWNLOAD_URL})\n\n"
+                                "Сохраните ключ и скачайте приложение! 🚀"
+                            ),
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            parse_mode="Markdown",
+                            reply_markup=markup,
+                            disable_web_page_preview=True
+                        )
+                        conn.close()
+                        return
+
                     hwid_key = generate_license()
                     sheet_success = append_license_to_sheet(hwid_key, username)
+                    cursor.execute('''
+                        UPDATE transactions SET license_key = ?, status = ? WHERE payment_id = ?
+                    ''', (hwid_key, 'succeeded', payment_id))
+                    conn.commit()
                     markup = types.InlineKeyboardMarkup()
                     markup.add(types.InlineKeyboardButton(text="🏠 Назад в главное меню", callback_data='menu_main'))
                     if sheet_success:
                         bot.edit_message_text(
                             (
                                 "🎉 *Поздравляем с покупкой!*\n\n"
-                                f"HWID-ключ:\n`{hwid_key}`\n\nСохраните его! 🚀"
+                                f"HWID-ключ:\n`{hwid_key}`\n\n"
+                                f"Скачать приложение Valture:\n[VALTURE.exe]({APP_DOWNLOAD_URL})\n\n"
+                                "Сохраните ключ и скачайте приложение! 🚀"
                             ),
                             chat_id=chat_id,
                             message_id=message_id,
                             parse_mode="Markdown",
-                            reply_markup=markup
+                            reply_markup=markup,
+                            disable_web_page_preview=True
                         )
                     else:
                         bot.edit_message_text(
                             (
                                 "🎉 *Поздравляем с покупкой!*\n\n"
-                                f"HWID-ключ:\n`{hwid_key}`\n\nСохраните его! 🚀\n\n"
+                                f"HWID-ключ:\n`{hwid_key}`\n\n"
+                                f"Скачать приложение Valture:\n[VALTURE.exe]({APP_DOWNLOAD_URL})\n\n"
+                                "Сохраните ключ и скачайте приложение! 🚀\n\n"
                                 "⚠️ Не удалось записать ключ в таблицу. Свяжитесь с @s3pt1ck."
                             ),
                             chat_id=chat_id,
                             message_id=message_id,
                             parse_mode="Markdown",
-                            reply_markup=markup
+                            reply_markup=markup,
+                            disable_web_page_preview=True
                         )
                     logger.info(f"YooKassa оплата подтверждена: {hwid_key} для {username}")
                     del invoices[chat_id]
@@ -634,6 +807,8 @@ def button_handler(call):
                         parse_mode="Markdown",
                         reply_markup=markup
                     )
+
+            conn.close()
 
         except Exception as e:
             logger.error(f"Ошибка проверки оплаты: {e}")
@@ -689,4 +864,9 @@ def button_handler(call):
 if __name__ == '__main__':
     Thread(target=run_flask).start()
     logger.info("Бот запущен")
-    bot.polling(non_stop=True)
+    try:
+        bot.polling(non_stop=True)
+    except Exception as e:
+        logger.error(f"Ошибка в polling: {e}")
+        time.sleep(10)
+        bot.polling(non_stop=True)
