@@ -21,7 +21,7 @@ YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID")
 YOOKASSA_SECRET_KEY = os.environ.get("YOOKASSA_SECRET_KEY")
 CREDS_FILE = os.environ.get("CREDS_FILE", "valture-license-bot-account.json")
 SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME", "Valture_Licenses")
-TEST_PAYMENT_AMOUNT = 4.0  # TON for CryptoBot
+TEST_PAYMENT_AMOUNT = 0.01  # TON for CryptoBot
 YOOKASSA_AMOUNT = 1000.0  # RUB for YooKassa
 
 SCOPE = [
