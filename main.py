@@ -233,7 +233,7 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = query.from_user.username or query.from_user.full_name
 
     try:
-        pay_link, invoice_id = get_pay_link('0.1')
+        pay_link, invoice_id = get_pay_link('0.01')
         if pay_link and invoice_id:
             context.user_data["invoice_id"] = invoice_id
             context.user_data["username"] = username
