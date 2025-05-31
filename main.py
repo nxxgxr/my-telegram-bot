@@ -39,9 +39,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Flask для keep-alive ---
+# --- Flask для keep-alive и вебхуков ---
 
 app = Flask(__name__)
+payment_status_cache = {}  # Кэш для статуса платежей от вебхука
 
 @app.route('/')
 def home():
@@ -56,6 +57,25 @@ def test_crypto_api():
         return f"API Response: {response.json()}"
     except Exception as e:
         return f"Error: {str(e)}"
+
+@app.route('/cryptobot-webhook', methods=['POST'])
+def cryptobot_webhook():
+    """Обработка вебхуков от CryptoBot."""
+    try:
+        data = request.get_json()
+        logger.debug(f"Получен вебхук: {data}")
+        if data and 'payload' in data:
+            invoice = data['payload']
+            invoice_id = str(invoice.get('invoice_id'))
+            status = invoice.get('status')
+            payment_status_cache[invoice_id] = status
+            logger.info(f"Обновлен статус платежа для invoice_id={invoice_id}: {status}")
+            return jsonify({"ok": True})
+        logger.error("Неверный формат вебхука")
+        return jsonify({"ok": False}), 400
+    except Exception as e:
+        logger.error(f"Ошибка обработки вебхука: {e}", exc_info=True)
+        return jsonify({"ok": False}), 500
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
@@ -126,7 +146,7 @@ def append_license_to_sheet(license_key, username):
         raise
 
 def create_crypto_invoice(amount):
-    """Создание инвойса через CryptoBot (копия get_pay_link из bot пример.py)."""
+    """Создание инвойса через CryptoBot."""
     headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
     data = {
         "asset": "TON",
@@ -147,7 +167,7 @@ def create_crypto_invoice(amount):
         return None, None
 
 def check_invoice_status(invoice_id):
-    """Проверка статуса инвойса CryptoBot (копия check_payment_status из bot пример.py)."""
+    """Проверка статуса инвойса CryptoBot."""
     headers = {
         "Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN,
         "Content-Type": "application/json"
@@ -158,6 +178,10 @@ def check_invoice_status(invoice_id):
         if response.ok:
             return response.json()
         logger.error(f"Ошибка API при проверке инвойса: {response.status_code}, {response.text}")
+        if response.status_code == 401:
+            logger.error("Неверный CRYPTOBOT_API_TOKEN")
+        elif response.status_code == 429:
+            logger.error("Превышен лимит запросов к CryptoBot API")
         return None
     except requests.exceptions.RequestException as e:
         logger.error(f"Сетевая ошибка при проверке инвойса: {e}")
@@ -297,12 +321,48 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = query.from_user.username or query.from_user.full_name
 
     try:
+        # Сначала проверяем кэш вебхука
+        if invoice_id in payment_status_cache:
+            status = payment_status_cache[invoice_id]
+            logger.debug(f"Статус из кэша для invoice_id={invoice_id}: {status}")
+            if status == 'paid':
+                hwid_key = generate_license()
+                append_license_to_sheet(hwid_key, username)
+                text = (
+                    "🎉 *Поздравляем с покупкой!*\n\n"
+                    "Ваш HWID-ключ:\n"
+                    f"`{hwid_key}`\n\n"
+                    "Сохраните его в надежном месте! 🚀"
+                )
+                buttons = [("🏠 Назад в главное меню", "menu_main")]
+                logger.info(f"Оплата подтверждена (кэш), HWID-ключ выдан: {hwid_key} для {username}")
+                await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+                if chat_id in invoices:
+                    del invoices[chat_id]
+                if invoice_id in payment_status_cache:
+                    del payment_status_cache[invoice_id]
+                return
+            else:
+                logger.warning(f"Оплата не подтверждена (кэш) для invoice_id={invoice_id}, статус: {status}")
+                await query.answer("❌ Оплата не найдена.", show_alert=True)
+                await query.edit_message_text(
+                    "❌ *Оплата не найдена*\n\nЗавершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck, если нужна помощь.",
+                    parse_mode="Markdown",
+                    reply_markup=get_keyboard([
+                        ("🔄 Проверить снова", f"check_payment_{invoice_id}"),
+                        ("🔙 Назад в главное меню", "menu_main")
+                    ])
+                )
+                return
+
+        # Если в кэше нет, запрашиваем API
         payment_status = check_invoice_status(invoice_id)
         if payment_status and payment_status.get('ok', False):
             if 'items' in payment_status.get('result', {}):
                 invoice = next((inv for inv in payment_status['result']['items'] if str(inv['invoice_id']) == invoice_id), None)
                 if invoice:
                     status = invoice.get('status')
+                    payment_status_cache[invoice_id] = status  # Обновляем кэш
                     if status == 'paid':
                         hwid_key = generate_license()
                         append_license_to_sheet(hwid_key, username)
@@ -313,12 +373,14 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             "Сохраните его в надежном месте! 🚀"
                         )
                         buttons = [("🏠 Назад в главное меню", "menu_main")]
-                        logger.info(f"Оплата подтверждена, HWID-ключ выдан: {hwid_key} для {username}")
+                        logger.info(f"Оплата подтверждена (API), HWID-ключ выдан: {hwid_key} для {username}")
                         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
                         if chat_id in invoices:
                             del invoices[chat_id]
+                        if invoice_id in payment_status_cache:
+                            del payment_status_cache[invoice_id]
                     else:
-                        logger.warning(f"Оплата не подтверждена для invoice_id={invoice_id}, статус: {status}")
+                        logger.warning(f"Оплата не подтверждена (API) для invoice_id={invoice_id}, статус: {status}")
                         await query.answer("❌ Оплата не найдена.", show_alert=True)
                         await query.edit_message_text(
                             "❌ *Оплата не найдена*\n\nЗавершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck, если нужна помощь.",
