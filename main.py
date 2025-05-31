@@ -17,14 +17,13 @@ from yookassa import Configuration, Payment
 
 # --- Настройки ---
 
-# Replace these with your own values in your environment variables
-BOT_TOKEN = os.environ.get("BOT_TOKEN")  # Your Telegram bot token from @BotFather
-CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN")  # Your CryptoBot token from @CryptoBot
-YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID")  # Your YooKassa shop ID
-YOOKASSA_SECRET_KEY = os.environ.get("YOOKASSA_SECRET_KEY")  # Your YooKassa secret key
+BOT_TOKEN = os.environ.get("BOT_TOKEN")  # Telegram bot token from @BotFather
+CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN")  # CryptoBot token from @CryptoBot
+YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID")  # YooKassa shop ID
+YOOKASSA_SECRET_KEY = os.environ.get("YOOKASSA_SECRET_KEY")  # YooKassa secret key
 CREDS_FILE = os.environ.get("CREDS_FILE", "creds.json")  # Path to Google credentials file
-SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME")  # Your Google Sheets spreadsheet name
-GOOGLE_CREDS_JSON_BASE64 = os.environ.get("GOOGLE_CREDS_JSON_BASE64")  # Base64-encoded Google credentials (optional)
+SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME")  # Google Sheets spreadsheet name
+GOOGLE_CREDS_JSON_BASE64 = os.environ.get("GOOGLE_CREDS_JSON_BASE64")  # Base64-encoded Google credentials
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
@@ -38,7 +37,7 @@ if YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY:
     Configuration.account_id = YOOKASSA_SHOP_ID
     Configuration.secret_key = YOOKASSA_SECRET_KEY
 else:
-    logging.warning("YooKassa credentials not set. YooKassa payments will be disabled.")
+    logging.warning("YooKassa credentials not set. YooKassa payments disabled.")
 
 # --- Логирование ---
 
@@ -102,7 +101,7 @@ def yookassa_webhook():
                     'payment_id': payment_id,
                     'user_id': int(user_id),
                     'username': username,
-                    'chat_id': int(user_id)  # Assuming private chat
+                    'chat_id': int(user_id)
                 },
                 name=f"yookassa_payment_{payment_id}"
             )
@@ -161,30 +160,29 @@ def run_flask():
 # --- Обработка Google Credentials ---
 
 def setup_google_creds():
-    """Декодирование base64-креденшлов Google и создание временного файла."""
-    logger.debug("Проверка Google credentials...")
+    """Decode base64 Google credentials and create a temporary file."""
+    logger.debug("Checking Google credentials...")
     if GOOGLE_CREDS_JSON_BASE64:
         try:
             creds_json = base64.b64decode(GOOGLE_CREDS_JSON_BASE64).decode("utf-8")
             with open(CREDS_FILE, "w") as f:
                 f.write(creds_json)
-            logger.info("Google credentials успешно декодированы и сохранены во временный файл")
+            logger.info("Google credentials decoded and saved to temporary file")
         except Exception as e:
-            logger.error(f"Ошибка при декодировании Google credentials: {e}")
+            logger.error(f"Error decoding Google credentials: {e}")
             raise
     elif not os.path.exists(CREDS_FILE):
-        logger.error("Файл Google credentials не найден, и GOOGLE_CREDS_JSON_BASE64 не задан")
-        raise FileNotFoundError("Файл Google credentials не найден, и GOOGLE_CREDS_JSON_BASE64 не задан")
+        logger.error("Google credentials file not found and GOOGLE_CREDS_JSON_BASE64 not set")
+        raise FileNotFoundError("Google credentials file not found")
     else:
-        logger.info("Используется существующий файл Google credentials")
+        logger.info("Using existing Google credentials file")
 
 # --- Логика Telegram бота ---
 
-# Кэш для данных Google Sheets
 sheet_cache = None
 
 def get_sheet():
-    """Получение кэшированного объекта Google Sheets."""
+    """Get cached Google Sheets object."""
     global sheet_cache
     if sheet_cache is None:
         try:
@@ -192,35 +190,35 @@ def get_sheet():
             creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPE)
             client = gspread.authorize(creds)
             sheet_cache = client.open(SPREADSHEET_NAME).sheet1
-            logger.info("Успешно подключено к Google Sheets")
+            logger.info("Connected to Google Sheets")
         except Exception as e:
-            logger.error(f"Ошибка подключения к Google Sheets: {e}")
+            logger.error(f"Error connecting to Google Sheets: {e}")
             raise
     return sheet_cache
 
 def generate_license():
-    """Генерация HWID ключа."""
+    """Generate HWID key."""
     return str(uuid4())
 
 def append_license_to_sheet(license_key, username):
-    """Добавление лицензии в Google Sheets."""
+    """Add license to Google Sheets."""
     try:
         sheet = get_sheet()
         utc_plus_2 = timezone(timedelta(hours=2))
         now_utc_plus_2 = datetime.now(utc_plus_2)
         now_str = now_utc_plus_2.strftime('%Y-%m-%d %H:%M:%S')
         sheet.append_row([license_key, "", username, now_str])
-        logger.info(f"✅ Лицензия {license_key} добавлена для {username}")
+        logger.info(f"✅ License {license_key} added for {username}")
     except Exception as e:
-        logger.error(f"Ошибка при добавлении лицензии: {e}")
+        logger.error(f"Error adding license: {e}")
         raise
 
 def create_crypto_invoice(amount, asset="TON", description="HWID Key"):
-    """Создание инвойса через CryptoBot."""
-    logger.debug(f"Создание инвойса: amount={amount}, asset={asset}, description={description}")
+    """Create a CryptoBot invoice."""
+    logger.debug(f"Creating invoice: amount={amount}, asset={asset}, description={description}")
     if not CRYPTOBOT_API_TOKEN:
-        logger.error("CRYPTOBOT_API_TOKEN не задан в переменных окружения")
-        return None, "CRYPTOBOT_API_TOKEN не найден. Проверьте настройки."
+        logger.error("CRYPTOBOT_API_TOKEN not set")
+        return None, "CRYPTOBOT_API_TOKEN not found. Check settings."
 
     try:
         payload = {
@@ -233,135 +231,142 @@ def create_crypto_invoice(amount, asset="TON", description="HWID Key"):
             "Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN,
             "Content-Type": "application/json"
         }
-        logger.debug(f"Отправка запроса на {CRYPTO_BOT_API}/createInvoice с payload={payload}")
+        logger.debug(f"Sending request to {CRYPTO_BOT_API}/createInvoice with payload={payload}")
         
         response = requests.post(f"{CRYPTO_BOT_API}/createInvoice", json=payload, headers=headers, timeout=10)
-        logger.debug(f"HTTP статус: {response.status_code}, Content-Type: {response.headers.get('Content-Type')}, Ответ: {response.content[:1000]}")
+        logger.debug(f"HTTP status: {response.status_code}, Content-Type: {response.headers.get('Content-Type')}, Response: {response.content[:1000]}")
         
-        response.raise_for_status()
+        if not response.headers.get('Content-Type', '').lower().startswith('application/json'):
+            logger.error(f"Non-JSON response: {response.content[:1000]}")
+            return None, "Non-JSON response from CryptoBot. Check CRYPTOBOT_API_TOKEN."
+
         data = response.json()
         
         if not data.get("ok"):
-            error_msg = data.get("error", "Неизвестная ошибка от CryptoBot")
-            logger.error(f"Ошибка API CryptoBot: {error_msg}")
-            return None, f"Ошибка API: {error_msg}"
+            error_msg = data.get("error", "Unknown CryptoBot error")
+            logger.error(f"CryptoBot API error: {error_msg}")
+            return None, f"API error: {error_msg}"
             
-        logger.info(f"Инвойс успешно создан: invoice_id={data['result']['invoice_id']}")
+        logger.info(f"Invoice created: invoice_id={data['result']['invoice_id']}")
         return data["result"], None
 
     except requests.exceptions.HTTPError as http_err:
-        logger.error(f"HTTP ошибка при создании инвойса: {http_err}, Ответ: {response.content[:1000]}")
+        logger.error(f"HTTP error creating invoice: {http_err}, Response: {response.content[:1000]}")
         if response.status_code == 401:
-            return None, "Недействительный CRYPTOBOT_API_TOKEN"
+            return None, "Invalid CRYPTOBOT_API_TOKEN"
         elif response.status_code == 429:
-            return None, "Превышен лимит запросов к CryptoBot API"
-        return None, f"HTTP ошибка: {http_err}"
+            return None, "CryptoBot API rate limit exceeded"
+        return None, f"HTTP error: {http_err}"
     except requests.exceptions.Timeout:
-        logger.error("Тайм-аут при обращении к CryptoBot API")
-        return None, "Тайм-аут запроса к CryptoBot API"
+        logger.error("Timeout accessing CryptoBot API")
+        return None, "Request timeout to CryptoBot API"
     except requests.exceptions.RequestException as req_err:
-        logger.error(f"Сетевая ошибка при создании инвойса: {req_err}")
-        return None, f"Сетевая ошибка: {req_err}"
+        logger.error(f"Network error creating invoice: {req_err}")
+        return None, f"Network error: {req_err}"
+    except ValueError as e:
+        logger.error(f"JSON decode error: {e}, content: {response.content[:1000]}")
+        return None, "Invalid response from CryptoBot"
     except Exception as e:
-        logger.error(f"Общая ошибка при создании инвойса: {e}")
-        return None, f"Общая ошибка: {e}"
+        logger.error(f"General error creating invoice: {e}")
+        return None, f"Error: {e}"
 
 def check_invoice_status(invoice_id):
-    """Проверка статуса инвойса CryptoBot."""
-    logger.debug(f"Проверка статуса инвойса: invoice_id={invoice_id}")
+    """Check CryptoBot invoice status."""
+    logger.debug(f"Checking invoice status: invoice_id={invoice_id}")
     if not invoice_id:
-        logger.error("Invoice ID отсутствует")
-        return None, "Invoice ID отсутствует"
+        logger.error("Invoice ID missing")
+        return None, "Invoice ID missing"
     
     if not CRYPTOBOT_API_TOKEN:
-        logger.error("CRYPTOBOT_API_TOKEN не задан")
-        return None, "CRYPTOBOT_API_TOKEN не задан. Проверьте настройки."
+        logger.error("CRYPTOBOT_API_TOKEN not set")
+        return None, "CRYPTOBOT_API_TOKEN not set. Check settings."
 
     # Validate token format
     if not isinstance(CRYPTOBOT_API_TOKEN, str) or len(CRYPTOBOT_API_TOKEN) < 24 or ":" not in CRYPTOBOT_API_TOKEN:
-        logger.error("CRYPTOBOT_API_TOKEN выглядит недействительным")
-        return None, "CRYPTOBOT_API_TOKEN недействителен. Получите новый токен от @CryptoBot."
+        logger.error("CRYPTOBOT_API_TOKEN appears invalid")
+        return None, "Invalid CRYPTOBOT_API_TOKEN. Get a new token from @CryptoBot."
 
     # Test token validity
     try:
         headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
         test_response = requests.get(f"{CRYPTO_BOT_API}/getMe", headers=headers, timeout=5)
         if test_response.status_code == 401:
-            logger.error("CRYPTOBOT_API_TOKEN недействителен")
-            return None, "Недействительный CRYPTOBOT_API_TOKEN. Проверьте настройки."
+            logger.error("CRYPTOBOT_API_TOKEN invalid")
+            return None, "Invalid CRYPTOBOT_API_TOKEN. Check settings."
         test_response.raise_for_status()
     except requests.exceptions.RequestException as e:
-        logger.error(f"Ошибка проверки токена: {e}")
-        return None, f"Ошибка проверки токена: {str(e)}. Проверьте CRYPTOBOT_API_TOKEN."
+        logger.error(f"Token validation error: {e}")
+        return None, f"Token validation error: {str(e)}. Check CRYPTOBOT_API_TOKEN."
 
     try:
-        headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
-        response = requests.get(f"{CRYPTO_BOT_API}/getInvoices?invoice_ids={invoice_id}", headers=headers, timeout=10)
-        logger.debug(f"HTTP статус: {response.status_code}, Headers: {response.headers}, Ответ: {response.content[:1000]}")
+        headers = {
+            "Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN,
+            "Content-Type": "application/json"
+        }
+        payload = {"invoice_ids": str(invoice_id)}
+        response = requests.post(f"{CRYPTO_BOT_API}/getInvoices", json=payload, headers=headers, timeout=10)
+        logger.debug(f"HTTP status: {response.status_code}, Headers: {response.headers}, Response: {response.content[:1000]}")
 
         # Check Content-Type
         content_type = response.headers.get('Content-Type', '').lower()
-        if 'application/json' not in content_type:
-            logger.error(f"Неожиданный тип ответа: {content_type}, содержимое: {response.content[:1000]}")
-            return None, f"Ответ не является JSON: {content_type}. Проверьте CRYPTOBOT_API_TOKEN или свяжитесь с @CryptoBot."
+        if not content_type.startswith('application/json'):
+            logger.error(f"Unexpected response type: {content_type}, content: {response.content[:1000]}")
+            return None, f"Non-JSON response: {content_type}. Check CRYPTOBOT_API_TOKEN or contact @CryptoBot."
 
         # Try decoding response
         try:
             data = response.json()
-        except UnicodeDecodeError as decode_err:
-            logger.error(f"Ошибка декодирования UTF-8: {decode_err}, содержимое: {response.content[:1000]}")
-            try:
-                text = response.content.decode('latin-1')
-                logger.debug(f"Декодировано с latin-1: {text[:200]}")
-                return None, f"Ошибка декодирования: ответ не в UTF-8, содержимое: {text[:100]}. Проверьте CRYPTOBOT_API_TOKEN."
-            except Exception:
-                return None, f"Ошибка декодирования: {decode_err}. Проверьте CRYPTOBOT_API_TOKEN или свяжитесь с @CryptoBot."
         except ValueError as json_err:
-            logger.error(f"Ошибка парсинга JSON: {json_err}, содержимое: {response.content[:1000]}")
-            return None, f"Ошибка парсинга JSON: {json_err}. Проверьте CRYPTOBOT_API_TOKEN или свяжитесь с @CryptoBot."
+            logger.error(f"JSON parsing error: {json_err}, content: {response.content[:1000]}")
+            return None, f"JSON parsing error: {json_err}. Check CRYPTOBOT_API_TOKEN or contact @CryptoBot."
 
         if not data.get("ok"):
-            error_msg = data.get("error", "Неизвестная ошибка от CryptoBot")
-            logger.error(f"Ошибка API CryptoBot: {error_msg}")
-            return None, f"Ошибка API: {error_msg}. Проверьте invoice_id или свяжитесь с @CryptoBot."
+            error_msg = data.get("error", "Unknown CryptoBot error")
+            logger.error(f"CryptoBot API error: {error_msg}")
+            return None, f"API error: {error_msg}. Check invoice_id or contact @CryptoBot."
 
         items = data.get("result", {}).get("items", [])
         if not items:
-            logger.error(f"Пустой список инвойсов для invoice_id={invoice_id}")
-            return None, "Инвойс не найден. Попробуйте снова или создайте новый инвойс."
+            logger.error(f"Empty invoice list for invoice_id={invoice_id}")
+            return None, "Invoice not found. Try again or create a new invoice."
 
-        status = items[0].get("status")
+        invoice = next((inv for inv in items if str(inv['invoice_id']) == invoice_id), None)
+        if not invoice:
+            logger.error(f"Invoice not found in response for invoice_id={invoice_id}")
+            return None, "Invoice not found."
+
+        status = invoice.get("status")
         if not status:
-            logger.error(f"Статус инвойса отсутствует для invoice_id={invoice_id}")
-            return None, "Статус инвойса не найден."
+            logger.error(f"Invoice status missing for invoice_id={invoice_id}")
+            return None, "Invoice status not found."
 
-        logger.info(f"Статус инвойса {invoice_id}: {status}")
+        logger.info(f"Invoice status {invoice_id}: {status}")
         return status, None
 
     except requests.exceptions.HTTPError as http_err:
-        logger.error(f"HTTP ошибка: {http_err}, Ответ: {response.content[:1000]}")
+        logger.error(f"HTTP error: {http_err}, Response: {response.content[:1000]}")
         if response.status_code == 401:
-            return None, "Недействительный CRYPTOBOT_API_TOKEN. Проверьте настройки."
+            return None, "Invalid CRYPTOBOT_API_TOKEN. Check settings."
         elif response.status_code == 404:
-            return None, "Инвойс не найден на сервере CryptoBot."
+            return None, "Invoice not found on CryptoBot server."
         elif response.status_code == 429:
-            return None, "Превышен лимит запросов к CryptoBot API. Попробуйте позже."
-        return None, f"HTTP ошибка: {http_err}. Свяжитесь с @CryptoBot."
+            return None, "CryptoBot API rate limit exceeded. Try later."
+        return None, f"HTTP error: {http_err}. Contact @CryptoBot."
     except requests.exceptions.Timeout:
-        logger.error("Тайм-аут при обращении к CryptoBot API")
-        return None, "Тайм-аут запроса к CryptoBot API. Попробуйте снова."
+        logger.error("Timeout accessing CryptoBot API")
+        return None, "Request timeout to CryptoBot API. Try again."
     except requests.exceptions.RequestException as req_err:
-        logger.error(f"Сетевая ошибка при проверке инвойса: {req_err}")
-        return None, f"Сетевая ошибка: {req_err}. Проверьте подключение."
+        logger.error(f"Network error checking invoice: {req_err}")
+        return None, f"Network error: {req_err}. Check connection."
     except Exception as e:
-        logger.error(f"Общая ошибка при проверке инвойса: {e}")
-        return None, f"Общая ошибка: {str(e)}. Свяжитесь с @s3pt1ck."
+        logger.error(f"General error checking invoice: {e}")
+        return None, f"Error: {str(e)}. Contact @s3pt1ck."
 
 def create_yookassa_payment(amount, description, user_id, username):
-    """Создание платежа через YooKassa."""
-    logger.debug(f"Создание YooKassa платежа: amount={amount}, description={description}, user_id={user_id}")
+    """Create a YooKassa payment."""
+    logger.debug(f"Creating YooKassa payment: amount={amount}, description={description}, user_id={user_id}")
     if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
-        logger.error("YOOKASSA_SHOP_ID или YOOKASSA_SECRET_KEY не заданы")
+        logger.error("YOOKASSA_SHOP_ID or YOOKASSA_SECRET_KEY not set")
         return None, "YooKassa credentials not configured"
 
     try:
@@ -383,19 +388,19 @@ def create_yookassa_payment(amount, description, user_id, username):
             }
         }, idempotence_key)
 
-        logger.info(f"YooKassa платеж создан: payment_id={payment.id}")
+        logger.info(f"YooKassa payment created: payment_id={payment.id}")
         return payment, None
 
     except Exception as e:
-        logger.error(f"Ошибка при создании YooKassa платежа: {e}")
-        return None, f"YooKassa ошибка: {str(e)}"
+        logger.error(f"Error creating YooKassa payment: {e}")
+        return None, f"YooKassa error: {str(e)}"
 
 def get_keyboard(buttons):
-    """Создание клавиатуры с кнопками."""
+    """Create keyboard with buttons."""
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Приветственное сообщение."""
+    """Welcome message."""
     welcome_text = (
         "🎮 *Добро пожаловать в Valture!*\n\n"
         "Ваш лучший инструмент для игровой производительности! 🚀\n"
@@ -405,7 +410,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Главное меню без кнопки 'Назад'."""
+    """Main menu."""
     query = update.callback_query
     await query.answer()
     buttons = [
@@ -422,35 +427,33 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Информация о приложении с кнопкой 'Назад'."""
+    """About Valture."""
     query = update.callback_query
     await query.answer()
     text = (
         "✨ *Valture — Ваш путь к совершенству в играх*\n\n"
-        "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "Valture — это передовой инструмент, созданный для геймеров, которые не готовы мириться с компромиссами. "
         "Наша миссия — вывести вашу игровую производительность на новый уровень, обеспечив максимальную плавность, "
         "стабильность и отзывчивость системы. С Valture вы получите конкурентное преимущество, о котором всегда мечтали.\n\n"
         "🔥 *Почему выбирают Valture?*\n"
-        "🚀 Увеличение FPS на 20–30%: Оптимизируйте производительность вашей системы, чтобы добиться максимальной частоты кадров.\n"
-        "🛡️ Стабильный фреймрейт: Забудьте о лагах и просадках FPS — Valture обеспечивает плавный игровой процесс.\n"
-        "💡 Молниеносная отзывчивость: Сократите время отклика системы, чтобы каждый ваш клик или движение были мгновенными.\n"
-        "🔋 Оптимизация Windows: Полная настройка операционной системы для максимальной производительности в играх.\n"
-        "🛳️ Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
-        "🖥️ Плавность картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
-        "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
+        "🚀 Увеличение FPS на 20–30%\n"
+        "🛡️ Стабильный фреймрейт\n"
+        "💡 Молниеносная отзывчивость\n"
+        "🔋 Оптимизация Windows\n"
+        "🛳️ Плавность управления\n"
+        "🖥️ Плавность картинки в играх\n\n"
         "_Создано для геймеров, которые ценят качество и стремятся к победе._"
     )
     buttons = [("🔙 Назад в главное меню", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Меню оплаты с обновленной ценой и кнопкой 'Назад'."""
+    """Payment menu."""
     query = update.callback_query
     await query.answer()
     text = (
         "💳 *Покупка лицензии Valture*\n\n"
-        "Цена: *4 TON* или *1000 RUB (~$12.7)*\n"
+        "Цена: *4 TON* или *1000 RUB*\n"
         "Выберите способ оплаты:\n"
         "- *CryptoBot*: Оплата через криптовалюту.\n"
         "- *YooKassa*: Оплата картой.\n\n"
@@ -464,26 +467,26 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Инициирование оплаты через CryptoBot."""
+    """Initiate CryptoBot payment."""
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     username = query.from_user.username or query.from_user.full_name
 
     try:
-        logger.debug(f"Создание CryptoBot инвойса для пользователя: {username} (ID: {user_id})")
-        invoice, error = create_crypto_invoice(amount=0.01, asset="TON", description="HWID Key")
+        logger.debug(f"Creating CryptoBot invoice for user: {username} (ID: {user_id})")
+        invoice, error = create_crypto_invoice(amount=4.0, asset="TON", description="HWID Key")
         if not invoice:
             error_msg = (
                 "❌ *Ошибка при создании инвойса!*\n\n"
                 f"Причина: {error or 'Неизвестная ошибка'}.\n"
-                "Проверьте CRYPTOBOT_API_TOKEN в настройках или свяжитесь с @s3pt1ck."
+                "Проверьте CRYPTOBOT_API_TOKEN или свяжитесь с @s3pt1ck."
             )
             buttons = [
                 ("🔄 Попробовать снова", "pay_crypto"),
                 ("🔙 Назад к способам оплаты", "menu_pay")
             ]
-            logger.error(f"Ошибка в pay_crypto: {error}")
+            logger.error(f"Error in pay_crypto: {error}")
             await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
             return
 
@@ -493,13 +496,13 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["payment_type"] = "crypto"
         context.user_data["invoice_id"] = invoice_id
         context.user_data["username"] = username
-        logger.info(f"CryptoBot инвойс создан: invoice_id={invoice_id}, pay_url={pay_url}")
+        logger.info(f"CryptoBot invoice created: invoice_id={invoice_id}, pay_url={pay_url}")
 
         text = (
             "💸 *Оплатите через CryptoBot*\n\n"
             "Цена: *4 TON*\n"
             f"[Оплатить через CryptoBot]({pay_url})\n\n"
-            "После оплаты нажмите 'Подтвердить оплату' для получения ключа."
+            "После оплаты нажмите 'Подтвердить оплату'."
         )
         buttons = [
             ("✅ Подтвердить оплату", "pay_crypto_confirm"),
@@ -507,7 +510,7 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
     except Exception as e:
-        logger.error(f"Критическая ошибка в pay_crypto: {e}", exc_info=True)
+        logger.error(f"Critical error in pay_crypto: {e}", exc_info=True)
         error_msg = (
             "❌ *Критическая ошибка!*\n\n"
             f"Причина: {str(e)}.\n"
@@ -520,7 +523,7 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка оплаты и выдача HWID ключа."""
+    """Check payment and issue HWID key."""
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
@@ -530,7 +533,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if payment_type != "crypto":
         text = (
             "❌ *Ошибка!*\n\n"
-            "Эта кнопка только для оплаты через CryptoBot. Оплаты YooKassa подтверждаются автоматически."
+            "Эта кнопка только для CryptoBot. YooKassa подтверждается автоматически."
         )
         buttons = [("🔙 Назад к способам оплаты", "menu_pay")]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -538,10 +541,10 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     invoice_id = context.user_data.get("invoice_id")
     if not invoice_id or not username:
-        logger.error(f"Данные об оплате отсутствуют: invoice_id={invoice_id}, username={username}")
+        logger.error(f"Payment data missing: invoice_id={invoice_id}, username={username}")
         text = (
             "❌ *Ошибка!*\n\n"
-            "Данные об оплате отсутствуют. Начните процесс оплаты заново или свяжитесь с @s3pt1ck."
+            "Данные об оплате отсутствуют. Начните заново или свяжитесь с @s3pt1ck."
         )
         buttons = [
             ("🔄 Попробовать снова", "pay_crypto"),
@@ -557,7 +560,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         status, error = check_invoice_status(invoice_id)
         if error:
-            logger.error(f"Ошибка при проверке инвойса: {error}")
+            logger.error(f"Error checking invoice: {error}")
             text = (
                 f"❌ *Ошибка при проверке оплаты!*\n\n"
                 f"Причина: {error}\n"
@@ -580,15 +583,15 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "Сохраните его в надежном месте! 🚀"
             )
             buttons = [("🏠 Назад в главное меню", "menu_main")]
-            logger.info(f"CryptoBot оплата подтверждена, ключ выдан: {hwid} для {username}")
+            logger.info(f"CryptoBot payment confirmed, key issued: {hwid} for {username}")
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
             context.user_data.clear()
         else:
-            logger.warning(f"CryptoBot оплата не подтверждена: invoice_id={invoice_id}, status={status}")
+            logger.warning(f"CryptoBot payment not confirmed: invoice_id={invoice_id}, status={status}")
             text = (
                 "⏳ *Оплата еще не подтверждена!*\n\n"
                 f"Статус: {status}.\n"
-                "Завершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck, если нужна помощь."
+                "Завершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck."
             )
             buttons = [
                 ("🔄 Проверить снова", "pay_crypto_confirm"),
@@ -596,7 +599,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
             ]
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
     except Exception as e:
-        logger.error(f"Критическая ошибка в pay_crypto_confirm: {e}", exc_info=True)
+        logger.error(f"Critical error in pay_crypto_confirm: {e}", exc_info=True)
         text = (
             f"❌ *Критическая ошибка!*\n\n"
             f"Причина: {str(e)}.\n"
@@ -609,7 +612,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Подтверждение оплаты через YooKassa."""
+    """Confirm YooKassa payment."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -624,14 +627,14 @@ async def pay_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка оплаты через YooKassa после подтверждения."""
+    """Process YooKassa payment."""
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     username = query.from_user.username or query.from_user.full_name
 
     try:
-        logger.debug(f"Создание YooKassa платежа для пользователя: {username} (ID: {user_id})")
+        logger.debug(f"Creating YooKassa payment for user: {username} (ID: {user_id})")
         payment, error = create_yookassa_payment(
             amount=1000.0,
             description="Valture License",
@@ -640,7 +643,7 @@ async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         if not payment:
             error_msg = (
-                "❌ *Ой, что-то пошло не так!*\n\n"
+                "❌ *Ошибка!*\n\n"
                 f"Не удалось создать платеж: {error or 'Неизвестная ошибка'}.\n"
                 "Проверьте YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY или свяжитесь с @s3pt1ck."
             )
@@ -648,7 +651,7 @@ async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
                 ("🔄 Попробовать снова", "pay_yookassa"),
                 ("🔙 Назад к способам оплаты", "menu_pay")
             ]
-            logger.error(f"Ошибка в pay_yookassa: {error}")
+            logger.error(f"Error in pay_yookassa: {error}")
             await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
             return
 
@@ -658,20 +661,20 @@ async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data["payment_type"] = "yookassa"
         context.user_data["payment_id"] = payment_id
         context.user_data["username"] = username
-        logger.info(f"YooKassa платеж создан: payment_id={payment_id}, confirmation_url={confirmation_url}")
+        logger.info(f"YooKassa payment created: payment_id={payment_id}, confirmation_url={confirmation_url}")
 
         text = (
             "💳 *Оплатите через YooKassa*\n\n"
             "Нажмите ниже для оплаты *1000 RUB*:\n"
             f"[Оплатить через YooKassa]({confirmation_url})\n\n"
-            "Ключ будет отправлен автоматически после оплаты."
+            "Ключ будет отправлен автоматически."
         )
         buttons = [("🔙 Назад к способам оплаты", "menu_pay")]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
     except Exception as e:
-        logger.error(f"Критическая ошибка в pay_yookassa_confirm: {e}", exc_info=True)
+        logger.error(f"Critical error in pay_yookassa_confirm: {e}", exc_info=True)
         error_msg = (
-            "❌ *Что-то сломалось!*\n\n"
+            "❌ *Ошибка!*\n\n"
             f"Ошибка: {str(e)}.\n"
             "Проверьте YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY или свяжитесь с @s3pt1ck."
         )
@@ -682,15 +685,15 @@ async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка оплаты с кнопкой 'Назад'."""
+    """Verify payment."""
     query = update.callback_query
     await query.answer()
 
     payment_type = context.user_data.get("payment_type")
     if payment_type != "crypto":
         text = (
-            "❌ *Ой, ошибка!*\n\n"
-            "Эта кнопка только для оплаты через CryptoBot. Оплаты YooKassa подтверждаются автоматически."
+            "❌ *Ошибка!*\n\n"
+            "Эта кнопка только для CryptoBot. YooKassa подтверждается автоматически."
         )
         buttons = [("🔙 Назад к способам оплаты", "menu_pay")]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
@@ -700,10 +703,10 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = context.user_data.get("username")
 
     if not invoice_id or not username:
-        logger.error(f"Данные об оплате отсутствуют: invoice_id={invoice_id}, username={username}")
+        logger.error(f"Payment data missing: invoice_id={invoice_id}, username={username}")
         text = (
-            "❌ *Данные об оплате отсутствуют!*\n\n"
-            "Начните процесс оплаты заново или свяжитесь с @s3pt1ck."
+            "❌ *Ошибка!*\n\n"
+            "Данные об оплате отсутствуют. Начните заново или свяжитесь с @s3pt1ck."
         )
         buttons = [
             ("🔄 Попробовать снова", "pay_crypto"),
@@ -719,9 +722,9 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         status, error = check_invoice_status(invoice_id)
         if error:
-            logger.error(f"Ошибка при проверке инвойса: {error}")
+            logger.error(f"Error checking invoice: {error}")
             text = (
-                f"❌ *Не удалось проверить оплату!*\n\n"
+                f"❌ *Ошибка!*\n\n"
                 f"Ошибка: {error}.\n"
                 "Проверьте CRYPTOBOT_API_TOKEN или свяжитесь с @s3pt1ck."
             )
@@ -742,14 +745,14 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Сохраните его в надежном месте! 🚀"
             )
             buttons = [("🏠 Назад в главное меню", "menu_main")]
-            logger.info(f"CryptoBot оплата подтверждена, ключ выдан: {license_key} для {username}")
+            logger.info(f"CryptoBot payment confirmed, key issued: {license_key} for {username}")
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
             context.user_data.clear()
         else:
-            logger.warning(f"CryptoBot оплата не подтверждена для invoice_id={invoice_id}, статус: {status}")
+            logger.warning(f"CryptoBot payment not confirmed: invoice_id={invoice_id}, status={status}")
             text = (
                 "⏳ *Оплата еще не подтверждена*\n\n"
-                f"Статус: {status}. Завершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck, если нужна помощь."
+                f"Статус: {status}. Завершите оплату или попробуйте снова."
             )
             buttons = [
                 ("🔄 Проверить снова", "pay_verify"),
@@ -757,9 +760,9 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
     except Exception as e:
-        logger.error(f"Ошибка при проверке CryptoBot оплаты: {e}", exc_info=True)
+        logger.error(f"Error verifying CryptoBot payment: {e}", exc_info=True)
         text = (
-            f"❌ *Критическая ошибка!*\n\n"
+            f"❌ *Ошибка!*\n\n"
             f"Ошибка: {str(e)}.\n"
             "Проверьте CRYPTOBOT_API_TOKEN или свяжитесь с @s3pt1ck."
         )
@@ -770,7 +773,7 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Меню поддержки с кнопкой 'Назад'."""
+    """Support menu."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -783,7 +786,7 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """FAQ с краткими ответами и кнопкой 'Назад'."""
+    """FAQ section."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -799,7 +802,7 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Раздел новостей с кнопкой 'Назад'."""
+    """News section."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -811,7 +814,7 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик нажатий кнопок."""
+    """Handle button presses."""
     query = update.callback_query
     data = query.data
 
