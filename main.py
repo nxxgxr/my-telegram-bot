@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
 import logging
+import time
 
 # --- Настройки ---
 
@@ -70,7 +71,10 @@ def get_sheet():
             creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPE)
             client = gspread.authorize(creds)
             sheet_cache = client.open(SPREADSHEET_NAME).sheet1
-            logger.info("Успешно подключено к Google Sheets")
+            logger.info(f"Успешно подключено к Google Sheet: {SPREADSHEET_NAME}")
+        except gspread.exceptions.SpreadsheetNotFound:
+            logger.error(f"Google Sheet с именем '{SPREADSHEET_NAME}' не найдена")
+            raise
         except Exception as e:
             logger.error(f"Ошибка подключения к Google Sheets: {str(e)}", exc_info=True)
             raise
@@ -86,18 +90,24 @@ def generate_license(length=32):
         logger.error(f"Ошибка при генерации ключа: {str(e)}", exc_info=True)
         raise
 
-def append_license_to_sheet(license_key, username):
-    """Добавление HWID-ключа в Google Sheets."""
-    try:
-        sheet = get_sheet()
-        utc_plus_2 = timezone(timedelta(hours=2))
-        now_utc_plus_2 = datetime.now(utc_plus_2)
-        now_str = now_utc_plus_2.strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([license_key, "", username, now_str])
-        logger.info(f"HWID-ключ {license_key} добавлен для {username}")
-    except Exception as e:
-        logger.error(f"Ошибка при добавлении HWID-ключа: {str(e)}", exc_info=True)
-        raise
+def append_license_to_sheet(license_key, username, retries=3, delay=2):
+    """Добавление HWID-ключа в Google Sheets с повторными попытками."""
+    for attempt in range(1, retries + 1):
+        try:
+            sheet = get_sheet()
+            utc_plus_2 = timezone(timedelta(hours=2))
+            now_utc_plus_2 = datetime.now(utc_plus_2)
+            now_str = now_utc_plus_2.strftime("%Y-%m-%d %H:%M:%S")
+            sheet.append_row([license_key, "", username, now_str])
+            logger.info(f"HWID-ключ {license_key} успешно добавлен для {username}")
+            return True
+        except Exception as e:
+            logger.error(f"Попытка {attempt}/{retries} не удалась при добавлении HWID-ключа: {str(e)}", exc_info=True)
+            if attempt < retries:
+                logger.debug(f"Ожидание {delay} секунд перед повторной попыткой...")
+                time.sleep(delay)
+    logger.error(f"Не удалось добавить HWID-ключ {license_key} после {retries} попыток")
+    return False
 
 # --- Логика бота ---
 
@@ -107,6 +117,20 @@ def welcome(message):
     get_button = types.InlineKeyboardButton(text="Оплатить", callback_data=f'get_{TEST_PAYMENT_AMOUNT}')
     markup.add(get_button)
     bot.send_message(message.chat.id, "Добро пожаловать! Нажмите кнопку ниже, чтобы купить данный товар.", reply_markup=markup)
+
+@bot.message_handler(commands=['test_sheets'])
+def test_sheets(message):
+    """Команда для тестирования доступа к Google Sheets."""
+    try:
+        sheet = get_sheet()
+        test_key = "TEST_KEY_" + str(int(time.time()))
+        sheet.append_row([test_key, "", "test_user", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+        bot.reply_to(message, f"Успешно записан тестовый ключ {test_key} в Google Sheet!")
+        logger.info(f"Тестовая запись {test_key} успешно добавлена в Google Sheet")
+    except Exception as e:
+        error_msg = f"Ошибка при тестировании Google Sheets: {str(e)}"
+        bot.reply_to(message, error_msg)
+        logger.error(error_msg, exc_info=True)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('get_'))
 def get_invoice(call):
@@ -144,14 +168,11 @@ def check_payment(call):
                     if status == 'paid':
                         try:
                             hwid_key = generate_license()
-                            try:
-                                append_license_to_sheet(hwid_key, username)
-                                logger.info(f"Успешно записан HWID-ключ {hwid_key} в Google Sheets для {username}")
-                            except Exception as sheet_error:
-                                logger.error(f"Не удалось записать HWID-ключ в Google Sheets: {str(sheet_error)}", exc_info=True)
-                                bot.send_message(chat_id, f"Оплата прошла успешно!✅\n\nВаш HWID-ключ:\n`{hwid_key}`\n\nСохраните его в надежном месте! 🚀\n\n⚠️ Внимание: Не удалось записать ключ в таблицу. Свяжитесь с @s3pt1ck.", parse_mode="Markdown")
-                            else:
+                            sheet_success = append_license_to_sheet(hwid_key, username)
+                            if sheet_success:
                                 bot.send_message(chat_id, f"Оплата прошла успешно!✅\n\nВаш HWID-ключ:\n`{hwid_key}`\n\nСохраните его в надежном месте! 🚀", parse_mode="Markdown")
+                            else:
+                                bot.send_message(chat_id, f"Оплата прошла успешно!✅\n\nВаш HWID-ключ:\n`{hwid_key}`\n\nСохраните его в надежном месте! 🚀\n\n⚠️ Внимание: Не удалось записать ключ в таблицу. Свяжитесь с @s3pt1ck.", parse_mode="Markdown")
                             logger.info(f"Тестовая оплата подтверждена, HWID-ключ выдан: {hwid_key} для {username}")
                             if chat_id in invoices:
                                 del invoices[chat_id]
