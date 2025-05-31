@@ -10,17 +10,25 @@ from google.oauth2.service_account import Credentials
 import logging
 import time
 from flask import Flask, request, jsonify
-from threading import Thread
+from threading import Thread, Timer
 from uuid import uuid4
 from yookassa import Configuration, Payment
 import sqlite3
-from apscheduler.schedulers.background import BackgroundScheduler
 
 # --- Настройки ---
-# Цены и ссылка на приложение
-CRYPTO_AMOUNT = 1  # TON для CryptoBot
-YOOKASSA_AMOUNT = 1.0  # RUB для YooKassa
+# Цены, ссылка на приложение и новости
+CRYPTO_AMOUNT = 4.0  # TON для CryptoBot
+YOOKASSA_AMOUNT = 1000.0  # RUB для YooKassa
 APP_DOWNLOAD_URL = "https://www.dropbox.com/scl/fi/ze5ebd909z2qeaaucn56q/VALTURE.exe?rlkey=ihdzk8voej4oikrdhq0wfzvbb&st=7lufvad0&dl=1"
+NEWS_TEXT = (
+    "📰 *Новости Valture*\n\n"
+    "📢 *Обновление 1.2.3 (01.06.2025)*\n"
+    "- Улучшена оптимизация FPS для новых видеокарт.\n"
+    "- Исправлены баги с мышью в некоторых играх.\n"
+    "- Добавлена поддержка Windows 11 24H2.\n\n"
+    "Скачивайте последнюю версию приложения по ссылке, которая приходит с ключом!\n"
+    "Следите за новостями и пишите в поддержку @s3pt1ck, если есть вопросы."
+)
 
 TOKEN = os.environ.get("BOT_TOKEN", 'YOUR_BOT_TOKEN')
 CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN", 'YOUR_CRYPTOBOT_TOKEN')
@@ -189,10 +197,11 @@ def clean_old_invoices():
     for user_id in expired:
         del invoices[user_id]
     logger.debug(f"Очищено {len(expired)} устаревших инвойсов")
+    # Планируем следующую очистку через 10 минут
+    Timer(600, clean_old_invoices).start()
 
-scheduler = BackgroundScheduler()
-scheduler.add_job(clean_old_invoices, 'interval', minutes=10)
-scheduler.start()
+# Запускаем первую очистку
+Timer(600, clean_old_invoices).start()
 
 # --- Обработка Google Sheets ---
 def setup_google_creds():
@@ -358,23 +367,24 @@ def test_sheets(message):
         sheet = get_sheet()
         test_key = "TEST_KEY_" + str(int(time.time()))
         sheet.append_row([test_key, "", "test_user", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
-        bot.reply_to(message, f"Успешно записан тестовый ключ {test_key}!")
         logger.info(f"Тестовая запись {test_key} добавлена")
+        bot.reply_to(message, f"✅ Успешно записан тестовый ключ: {test_key}!")
     except Exception as e:
-        error_msg = f"Ошибка при тестировании Google Sheets: {str(e)}"
-        bot.reply_to(message, error_msg)
-        logger.error(error_msg)
+        logger.error(f"Ошибка при тестировании Google Sheets: {test_key} }")
+        bot.reply_to(message, f"❌ Ошибка при тестировании: {str(e)}")
 
 @bot.callback_query_handler(func=lambda call: True)
 def button_handler(call):
     data = call.data
     chat_id = call.message.chat.id
     message_id = call.message.message_id
+    markup = types.InlineKeyboardMarkup()
     username = call.from_user.username or call.from_user.first_name
 
     if data == "menu_main":
-        markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(text="ℹ️ О Valture", callback_data='menu_about'))
+        markup.add(types.InlineKeyboardButton(text="📰 Новости", callback_data='menu_news'))
+        markup.add(types.InlineKeyboardButton(text="💰 Купленные лицензии", callback_data='menu_licenses'))
         markup.add(types.InlineKeyboardButton(text="💳 Купить лицензию", callback_data='menu_pay'))
         markup.add(types.InlineKeyboardButton(text="❓ FAQ", callback_data='menu_faq'))
         markup.add(types.InlineKeyboardButton(text="📞 Поддержка", callback_data='menu_support'))
@@ -387,24 +397,20 @@ def button_handler(call):
         )
 
     elif data == "menu_about":
-        markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data='menu_main'))
         bot.edit_message_text(
             (
                 "✨ *Valture — Ваш путь к совершенству в играх*\n\n"
                 "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-                "Valture — это передовой инструмент, созданный для геймеров, которые не готовы мириться с компромиссами. "
-                "Наша миссия — вывести вашу игровую производительность на новый уровень, обеспечив максимальную плавность, "
-                "стабильность и отзывчивость системы. С Valture вы получите конкурентное преимущество, о котором всегда мечтали.\n\n"
+                "Valture — это передовой инструмент, созданный для геймеров, которые не готовы мириться с компромиссами.\n\n"
                 "🔥 *Почему выбирают Valture?*\n"
-                "🚀 Увеличение FPS на 20–30%: Оптимизируйте производительность вашей системы, чтобы добиться максимальной частоты кадров.\n"
-                "🛡️ Стабильный фреймрейт: Забудьте о лагах и просадках FPS — Valture обеспечивает плавный игровой процесс.\n"
-                "💡 Молниеносная отзывчивость: Сократите время отклика системы, чтобы каждый ваш клик или движение были мгновенными.\n"
-                "🔋 Оптимизация Windows: Полная настройка операционной системы для максимальной производительности в играх.\n"
-                "🛳️ Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
-                "🖥️ Плавность картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
-                "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-                "_Создано для геймеров, которые ценят качество и стремятся к победе._"
+                "🚀 Увеличение FPS на 20–30%.\n"
+                "🛡️ Стабильный фреймрейт.\n"
+                "💡 Молниеносная отзывчивость.\n"
+                "🔋 Оптимизация Windows.\n"
+                "🛳️ Плавность управления.\n"
+                "🖥️ Плавность картинки.\n\n"
+                "➖️ _Создано для геймеров, которые ценят качество._"
             ),
             chat_id=chat_id,
             message_id=message_id,
@@ -412,8 +418,58 @@ def button_handler(call):
             reply_markup=markup
         )
 
+    elif data == "menu_news":
+        markup.add(types.InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data='menu_main'))
+        bot.edit_message_text(
+            NEWS_TEXT,
+            chat_id=chat_id,
+            message_id=message_id,
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+
+    elif data == "menu_licenses":
+        try:
+            conn = sqlite3.connect('transactions.db')
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT license_key, timestamp, payment_type FROM transactions WHERE user_id = ? AND status = 'succeeded'",
+                (chat_id,)
+            )
+            results = cursor.fetchall()
+            conn.close()
+
+            markup.add(types.InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data='menu_main'))
+            if results:
+                response = "🔑 *Ваши купленные лицензии:*\n\n"
+                for key, timestamp, payment_type in results:
+                    response += (
+                        f"Ключ: `{key}`\n"
+                        f"Дата покупки: {timestamp}\n"
+                        f"Тип оплаты: {payment_type.capitalize()}\n\n"
+                    )
+            else:
+                response = "У вас нет купленных лицензий."
+                
+            bot.edit_message_text(
+                response,
+                chat_id=chat_id,
+                message_id=message_id,
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при получении лицензий: {e}")
+            markup.add(types.InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data='menu_main'))
+            bot.edit_message_text(
+                "❌ Ошибка при загрузке лицензий. Свяжитесь с @s3pt1ck.",
+                chat_id=chat_id,
+                message_id=message_id,
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+
     elif data == "menu_pay":
-        markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(text="💸 Оплатить через CryptoBot", callback_data='pay_crypto'))
         markup.add(types.InlineKeyboardButton(text="💳 Оплатить через YooKassa", callback_data='pay_yookassa'))
         markup.add(types.InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data='menu_main'))
@@ -433,7 +489,6 @@ def button_handler(call):
         )
 
     elif data == "pay_crypto":
-        markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(text="✅ Подтвердить оплату", callback_data='pay_crypto_confirm'))
         markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
         bot.edit_message_text(
@@ -452,7 +507,6 @@ def button_handler(call):
         try:
             invoice, error = create_crypto_invoice(amount=CRYPTO_AMOUNT)
             if not invoice:
-                markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton(text="🔄 Попробовать снова", callback_data='pay_crypto'))
                 markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
                 bot.edit_message_text(
@@ -466,7 +520,7 @@ def button_handler(call):
                     parse_mode="Markdown",
                     reply_markup=markup
                 )
-                return
+                return False
 
             invoice_id = invoice["invoice_id"]
             pay_url = invoice["pay_url"]
@@ -488,7 +542,6 @@ def button_handler(call):
             conn.commit()
             conn.close()
 
-            markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(text=f"Оплатить {CRYPTO_AMOUNT} TON", url=pay_url))
             markup.add(types.InlineKeyboardButton(text="✅ Подтвердить оплату", callback_data='pay_verify'))
             markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
@@ -507,7 +560,6 @@ def button_handler(call):
             )
         except Exception as e:
             logger.error(f"Ошибка создания инвойса: {e}")
-            markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(text="🔄 Попробовать снова", callback_data='pay_crypto'))
             markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
             bot.edit_message_text(
@@ -522,7 +574,6 @@ def button_handler(call):
             )
 
     elif data == "pay_yookassa":
-        markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(text="✅ Подтвердить оплату", callback_data='pay_yookassa_confirm'))
         markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
         bot.edit_message_text(
@@ -546,7 +597,6 @@ def button_handler(call):
                 username=username
             )
             if not payment:
-                markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton(text="🔄 Попробовать снова", callback_data='pay_yookassa'))
                 markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
                 bot.edit_message_text(
@@ -560,7 +610,7 @@ def button_handler(call):
                     parse_mode="Markdown",
                     reply_markup=markup
                 )
-                return
+                return False
 
             payment_id = payment.id
             confirmation_url = payment.confirmation.confirmation_url
@@ -572,7 +622,7 @@ def button_handler(call):
             }
             logger.info(f"YooKassa платеж создан: payment_id={payment_id}")
 
-            # Сохраняем платеж в базе
+            # Сохраняем платеж в базу
             conn = sqlite3.connect('transactions.db')
             cursor = conn.cursor()
             cursor.execute('''
@@ -582,7 +632,6 @@ def button_handler(call):
             conn.commit()
             conn.close()
 
-            markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(text=f"Оплатить {YOOKASSA_AMOUNT} RUB", url=confirmation_url))
             markup.add(types.InlineKeyboardButton(text="✅ Подтвердить оплату", callback_data='pay_verify'))
             markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
@@ -601,7 +650,6 @@ def button_handler(call):
             )
         except Exception as e:
             logger.error(f"Ошибка создания YooKassa платежа: {e}")
-            markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(text="🔄 Попробовать снова", callback_data='pay_yookassa'))
             markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
             bot.edit_message_text(
@@ -617,7 +665,6 @@ def button_handler(call):
 
     elif data == "pay_verify":
         if chat_id not in invoices:
-            markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
             bot.edit_message_text(
                 (
@@ -629,13 +676,12 @@ def button_handler(call):
                 parse_mode="Markdown",
                 reply_markup=markup
             )
-            return
+            return False
 
         payment_type = invoices[chat_id]['payment_type']
         username = invoices[chat_id]['username']
 
         try:
-            markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
             bot.edit_message_text(
                 "⏳ *Проверка оплаты...*\n\nПожалуйста, подождите.",
@@ -672,7 +718,7 @@ def button_handler(call):
                             disable_web_page_preview=True
                         )
                         conn.close()
-                        return
+                        return False
 
                     hwid_key = generate_license()
                     sheet_success = append_license_to_sheet(hwid_key, username)
@@ -714,7 +760,6 @@ def button_handler(call):
                     logger.info(f"CryptoBot оплата подтверждена: {hwid_key} для {username}")
                     del invoices[chat_id]
                 else:
-                    markup = types.InlineKeyboardMarkup()
                     markup.add(types.InlineKeyboardButton(text="🔄 Проверить снова", callback_data='pay_verify'))
                     markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
                     bot.edit_message_text(
@@ -752,7 +797,7 @@ def button_handler(call):
                             disable_web_page_preview=True
                         )
                         conn.close()
-                        return
+                        return False
 
                     hwid_key = generate_license()
                     sheet_success = append_license_to_sheet(hwid_key, username)
@@ -794,7 +839,6 @@ def button_handler(call):
                     logger.info(f"YooKassa оплата подтверждена: {hwid_key} для {username}")
                     del invoices[chat_id]
                 else:
-                    markup = types.InlineKeyboardMarkup()
                     markup.add(types.InlineKeyboardButton(text="🔄 Проверить снова", callback_data='pay_verify'))
                     markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
                     bot.edit_message_text(
@@ -812,7 +856,6 @@ def button_handler(call):
 
         except Exception as e:
             logger.error(f"Ошибка проверки оплаты: {e}")
-            markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(text="🔄 Проверить снова", callback_data='pay_verify'))
             markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
             bot.edit_message_text(
@@ -827,7 +870,6 @@ def button_handler(call):
             )
 
     elif data == "menu_faq":
-        markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data='menu_main'))
         bot.edit_message_text(
             (
@@ -846,7 +888,6 @@ def button_handler(call):
         )
 
     elif data == "menu_support":
-        markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data='menu_main'))
         bot.edit_message_text(
             (
