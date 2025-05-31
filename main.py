@@ -38,7 +38,7 @@ if YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY:
     Configuration.account_id = YOOKASSA_SHOP_ID
     Configuration.secret_key = YOOKASSA_SECRET_KEY
 else:
-    logger.warning("YooKassa credentials not set. YooKassa payments will be disabled.")
+    logging.warning("YooKassa credentials not set. YooKassa payments will be disabled.")
 
 # --- Логирование ---
 
@@ -208,8 +208,8 @@ def append_license_to_sheet(license_key, username):
         sheet = get_sheet()
         utc_plus_2 = timezone(timedelta(hours=2))
         now_utc_plus_2 = datetime.now(utc_plus_2)
-        now_str = f"{now_utc_plus_2.strftime('%Y-%m-%d %H:%M:%S')}"
-        sheet.append_row([license_key, "", username, now_str]))
+        now_str = now_utc_plus_2.strftime('%Y-%m-%d %H:%M:%S')
+        sheet.append_row([license_key, "", username, now_str])
         logger.info(f"✅ Лицензия {license_key} добавлена для {username}")
     except Exception as e:
         logger.error(f"Ошибка при добавлении лицензии: {e}")
@@ -227,7 +227,7 @@ def create_crypto_invoice(amount, asset="TON", description="HWID Key"):
             "amount": str(amount),
             "asset": asset,
             "description": description,
-            "id": str(uuid4()),
+            "order_id": str(uuid4()),
         }
         headers = {
             "Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN,
@@ -236,7 +236,7 @@ def create_crypto_invoice(amount, asset="TON", description="HWID Key"):
         logger.debug(f"Отправка запроса на {CRYPTO_BOT_API}/createInvoice с payload={payload}")
         
         response = requests.post(f"{CRYPTO_BOT_API}/createInvoice", json=payload, headers=headers, timeout=10)
-        logger.debug(f"HTTP статус: {response.status_code}, Content-Type: {response.headers.get('Content-Type')}, Ответ: {response.content[:1000]}}")
+        logger.debug(f"HTTP статус: {response.status_code}, Content-Type: {response.headers.get('Content-Type')}, Ответ: {response.content[:1000]}")
         
         response.raise_for_status()
         data = response.json()
@@ -246,14 +246,11 @@ def create_crypto_invoice(amount, asset="TON", description="HWID Key"):
             logger.error(f"Ошибка API CryptoBot: {error_msg}")
             return None, f"Ошибка API: {error_msg}"
             
-        logger.info(f"Инвойс успешно создан: invoice_id={data['result']['id']}")
+        logger.info(f"Инвойс успешно создан: invoice_id={data['result']['invoice_id']}")
         return data["result"], None
 
-    except requests.exceptions.JSONDecodeError as json_err:
-        logger.error(f"Ошибка при декодировании ответа: {json_err}, Ответ: {response.content[:200]}")
-        return None, f"Ошибка ответа API: {json_err}"
     except requests.exceptions.HTTPError as http_err:
-        logger.error(f"HTTP ошибка при создании инвойса: {http_err}, Ответ: {response.content[:200]}")
+        logger.error(f"HTTP ошибка при создании инвойса: {http_err}, Ответ: {response.content[:1000]}")
         if response.status_code == 401:
             return None, "Недействительный CRYPTOBOT_API_TOKEN"
         elif response.status_code == 429:
@@ -280,69 +277,69 @@ def check_invoice_status(invoice_id):
         logger.error("CRYPTOBOT_API_TOKEN не задан")
         return None, "CRYPTOBOT_API_TOKEN не задан. Проверьте настройки."
 
-    # Validate token format (basic check)
-    if not isinstance(CRYPTOBOT_API_TOKEN, str) or len(CRYPTOBOT_API_TOKEN) < 20:
+    # Validate token format
+    if not isinstance(CRYPTOBOT_API_TOKEN, str) or len(CRYPTOBOT_API_TOKEN) < 24 or ":" not in CRYPTOBOT_API_TOKEN:
         logger.error("CRYPTOBOT_API_TOKEN выглядит недействительным")
         return None, "CRYPTOBOT_API_TOKEN недействителен. Получите новый токен от @CryptoBot."
+
+    # Test token validity
+    try:
+        headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
+        test_response = requests.get(f"{CRYPTO_BOT_API}/getMe", headers=headers, timeout=5)
+        if test_response.status_code == 401:
+            logger.error("CRYPTOBOT_API_TOKEN недействителен")
+            return None, "Недействительный CRYPTOBOT_API_TOKEN. Проверьте настройки."
+        test_response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ошибка проверки токена: {e}")
+        return None, f"Ошибка проверки токена: {str(e)}. Проверьте CRYPTOBOT_API_TOKEN."
 
     try:
         headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
         response = requests.get(f"{CRYPTO_BOT_API}/getInvoices?invoice_ids={invoice_id}", headers=headers, timeout=10)
-        logger.debug(f"HTTP статус: {response.status_code}, Content-Type: {response.headers.get('content-type', '')}, Ответ: {response.content[:1000]}")
+        logger.debug(f"HTTP статус: {response.status_code}, Headers: {response.headers}, Ответ: {response.content[:1000]}")
 
         # Check Content-Type
-        content_type = response.headers.get('content-type', '').lower()
+        content_type = response.headers.get('Content-Type', '').lower()
         if 'application/json' not in content_type:
             logger.error(f"Неожиданный тип ответа: {content_type}, содержимое: {response.content[:1000]}")
             return None, f"Ответ не является JSON: {content_type}. Проверьте CRYPTOBOT_API_TOKEN или свяжитесь с @CryptoBot."
 
-        # Try decoding response with UTF-8
+        # Try decoding response
         try:
             data = response.json()
         except UnicodeDecodeError as decode_err:
             logger.error(f"Ошибка декодирования UTF-8: {decode_err}, содержимое: {response.content[:1000]}")
-            # Fallback: Try other encodings
-            encodings = ['latin-1', 'iso-8859-1']
-            for enc in encodings:
-                try:
-                    text = response.content.decode(enc)
-                    logger.debug(f"Декодировано с {enc}: {text[:200]}...")
-                    try:
-                        data = json.loads(text))
-                        break
-                    except json.JSONDecodeError:
-                        logger.error(f"Не удалось разобрать JSON с {enc}: {text[:200]}...")
-                        return None, f"Ошибка декодирования: не удалось разобрать JSON с {enc}. Проверьте CRYPTOBOT_API_TOKEN."
-                except Exception as e:
-                    logger.error(f"Ошибка при декодировании с {enc}: {e}")
-                    continue
-            if not data:
+            try:
+                text = response.content.decode('latin-1')
+                logger.debug(f"Декодировано с latin-1: {text[:200]}")
+                return None, f"Ошибка декодирования: ответ не в UTF-8, содержимое: {text[:100]}. Проверьте CRYPTOBOT_API_TOKEN."
+            except Exception:
                 return None, f"Ошибка декодирования: {decode_err}. Проверьте CRYPTOBOT_API_TOKEN или свяжитесь с @CryptoBot."
-
-        except json.JSONDecodeError as json_err:
-            logger.error(f"Ошибка JSON: {json_err}", Error: {json_err(error_msg)}, Response: {response.content[:1000]}")
-            return None, f"Ошибка разбора JSON: {json_err}. Проверьте CRYPTOBOT_API_TOKEN или свяжитесь с @CryptoBot."
+        except ValueError as json_err:
+            logger.error(f"Ошибка парсинга JSON: {json_err}, содержимое: {response.content[:1000]}")
+            return None, f"Ошибка парсинга JSON: {json_err}. Проверьте CRYPTOBOT_API_TOKEN или свяжитесь с @CryptoBot."
 
         if not data.get("ok"):
-            error_msg = data.get("error", f"Неизвестная ошибка: {json.dumps(data)}")
+            error_msg = data.get("error", "Неизвестная ошибка от CryptoBot")
             logger.error(f"Ошибка API CryptoBot: {error_msg}")
             return None, f"Ошибка API: {error_msg}. Проверьте invoice_id или свяжитесь с @CryptoBot."
 
-        items = data.get("result", "").get("items", {})
+        items = data.get("result", {}).get("items", [])
         if not items:
             logger.error(f"Пустой список инвойсов для invoice_id={invoice_id}")
             return None, "Инвойс не найден. Попробуйте снова или создайте новый инвойс."
 
         status = items[0].get("status")
         if not status:
-            logger.error(f"Статус инвойса отсутствует в ответе для invoice_id={invoice_id}")
+            logger.error(f"Статус инвойса отсутствует для invoice_id={invoice_id}")
             return None, "Статус инвойса не найден."
 
         logger.info(f"Статус инвойса {invoice_id}: {status}")
         return status, None
 
     except requests.exceptions.HTTPError as http_err:
-        logger.error(f"HTTP ошибка: {http_err}, Ответ: {response.content[:1000]}}")
+        logger.error(f"HTTP ошибка: {http_err}, Ответ: {response.content[:1000]}")
         if response.status_code == 401:
             return None, "Недействительный CRYPTOBOT_API_TOKEN. Проверьте настройки."
         elif response.status_code == 404:
@@ -439,8 +436,8 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🛡️ Стабильный фреймрейт: Забудьте о лагах и просадках FPS — Valture обеспечивает плавный игровой процесс.\n"
         "💡 Молниеносная отзывчивость: Сократите время отклика системы, чтобы каждый ваш клик или движение были мгновенными.\n"
         "🔋 Оптимизация Windows: Полная настройка операционной системы для максимальной производительности в играх.\n"
-        "🛳️  Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
-        "🖥️  Плавность картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
+        "🛳️ Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
+        "🖥️ Плавность картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "_Создано для геймеров, которые ценят качество и стремятся к победе._"
     )
@@ -490,7 +487,7 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
             return
 
-        invoice_id = invoice["id"]
+        invoice_id = invoice["invoice_id"]
         pay_url = invoice["pay_url"]
 
         context.user_data["payment_type"] = "crypto"
@@ -562,23 +559,23 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if error:
             logger.error(f"Ошибка при проверке инвойса: {error}")
             text = (
-                f"❌ *Ошибка при проверке оплаты!*\n"
-                f"Причина: {error}\n\n"
+                f"❌ *Ошибка при проверке оплаты!*\n\n"
+                f"Причина: {error}\n"
                 "Проверьте CRYPTOBOT_API_TOKEN или свяжитесь с @s3pt1ck."
             )
             buttons = [
                 ("🔄 Проверить снова", "pay_crypto_confirm"),
                 ("🔙 Назад к способам оплаты", "menu_pay")
             ]
-            await query.edit_message_text(text, parse_mode="Markdown", reply_markup= get_keyboard(buttons))
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
             return
 
         if status == "paid":
             hwid = generate_license()
-            append_license_to_hwid(hwid, username)
+            append_license_to_sheet(hwid, username)
             text = (
                 "🎉 *Поздравляем с покупкой!*\n\n"
-                "Ваш HWID ключ:\n\n"
+                "Ваш HWID ключ:\n"
                 f"`{hwid}`\n\n"
                 "Сохраните его в надежном месте! 🚀"
             )
@@ -597,19 +594,19 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 ("🔄 Проверить снова", "pay_crypto_confirm"),
                 ("🔙 Назад к способам оплаты", "menu_pay")
             ]
-            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons)))
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
     except Exception as e:
         logger.error(f"Критическая ошибка в pay_crypto_confirm: {e}", exc_info=True)
         text = (
-            f"❌ *Критическая ошибка!* \n\n"
+            f"❌ *Критическая ошибка!*\n\n"
             f"Причина: {str(e)}.\n"
             "Проверьте CRYPTOBOT_API_TOKEN или свяжитесь с @s3pt1ck."
         )
-            buttons = [
-                ("🔄 Проверить снова", "pay_crypto_confirm"),
-                ("🔙 Назад к способам оплаты", "menu_pay")
-            ]
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons)))
+        buttons = [
+            ("🔄 Проверить снова", "pay_crypto_confirm"),
+            ("🔙 Назад к способам оплаты", "menu_pay")
+        ]
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Подтверждение оплаты через YooKassa."""
@@ -626,10 +623,10 @@ async def pay_yookassa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def pay_yookassa_confirm(payment):
+async def pay_yookassa_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка оплаты через YooKassa после подтверждения."""
-    query = update.callback_query, payment
-    await context.query.payment()
+    query = update.callback_query
+    await query.answer()
     user_id = query.from_user.id
     username = query.from_user.username or query.from_user.full_name
 
