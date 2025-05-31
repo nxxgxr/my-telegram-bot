@@ -60,8 +60,10 @@ def test_crypto_api():
     try:
         headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
         response = requests.get(f"{CRYPTO_BOT_API}/getMe", headers=headers, timeout=10)
+        logger.debug(f"CryptoBot API test response: status={response.status_code}, content={response.text}")
         return f"API Response: {response.json()}"
     except Exception as e:
+        logger.error(f"Error testing CryptoBot API: {e}")
         return f"Error: {str(e)}"
 
 @app.route('/yookassa-webhook', methods=['POST'])
@@ -276,9 +278,22 @@ def check_invoice_status(invoice_id):
     try:
         headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
         response = requests.get(f"{CRYPTO_BOT_API}/getInvoices?invoice_ids={invoice_id}", headers=headers, timeout=10)
-        logger.debug(f"HTTP статус: {response.status_code}, Ответ: {response.text}")
-        response.raise_for_status()
-        data = response.json()
+        logger.debug(f"HTTP статус: {response.status_code}, Content-Type: {response.headers.get('Content-Type')}, Ответ: {response.content}")
+
+        # Check if response is JSON
+        if 'application/json' not in response.headers.get('Content-Type', ''):
+            logger.error(f"Неожиданный тип ответа: {response.headers.get('Content-Type')}, содержимое: {response.content}")
+            return None, "Ответ не является JSON"
+
+        # Try decoding response, handle encoding issues
+        try:
+            data = response.json()
+        except UnicodeDecodeError as decode_err:
+            logger.error(f"Ошибка декодирования ответа: {decode_err}, содержимое: {response.content}")
+            return None, f"Ошибка декодирования: {str(decode_err)}"
+        except ValueError as json_err:
+            logger.error(f"Ошибка парсинга JSON: {json_err}, содержимое: {response.content}")
+            return None, f"Ошибка парсинга JSON: {str(json_err)}"
 
         if not data.get("ok"):
             error_msg = data.get("error", "Неизвестная ошибка от CryptoBot")
@@ -299,7 +314,7 @@ def check_invoice_status(invoice_id):
         return status, None
 
     except requests.exceptions.HTTPError as http_err:
-        logger.error(f"HTTP ошибка при проверке инвойса: {http_err}, Ответ: {response.text}")
+        logger.error(f"HTTP ошибка при проверке инвойса: {http_err}, Ответ: {response.content}")
         if response.status_code == 401:
             return None, "Недействительный CRYPTOBOT_API_TOKEN"
         elif response.status_code == 429:
@@ -559,7 +574,7 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "Попробуйте снова или свяжитесь с @s3pt1ck."
         )
         buttons = [
-            ("🔄 Проверить снова", "pay_crypto"),
+            ("🔄 Проверить снова", "pay_crypto_confirm"),
             ("🔙 Назад к способам оплаты", "menu_pay")
         ]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
