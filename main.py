@@ -12,13 +12,18 @@ from threading import Thread
 from flask import Flask, jsonify
 import tempfile
 
-# --- Settings ---
+# --- Prices ---
+LICENSE_PRICE_TON = "0.01"
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN")
-SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME")
-GOOGLE_CREDS_JSON_BASE64 = os.environ.get("GOOGLE_CREDS_JSON_BASE64")
-CREDS_FILE = os.path.join(tempfile.gettempdir(), "google_creds.json")
+# --- Configuration ---
+CONFIG = {
+    "BOT_TOKEN": os.environ.get("BOT_TOKEN"),
+    "CRYPTOBOT_API_TOKEN": os.environ.get("CRYPTOBOT_API_TOKEN"),
+    "SPREADSHEET_NAME": os.environ.get("SPREADSHEET_NAME"),
+    "GOOGLE_CREDS_JSON_BASE64": os.environ.get("GOOGLE_CREDS_JSON_BASE64"),
+    "CREDS_FILE": os.path.join(tempfile.gettempdir(), "google_creds.json"),
+}
+
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
@@ -32,7 +37,6 @@ for var in REQUIRED_ENV_VARS:
         raise ValueError(f"Missing required environment variable: {var}")
 
 # --- Logging ---
-
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -40,7 +44,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Flask for keep-alive ---
-
 app = Flask(__name__)
 
 @app.route('/')
@@ -52,34 +55,31 @@ def run_flask():
     app.run(host="0.0.0.0", port=port)
 
 # --- Google Sheets Setup ---
-
 sheet_cache = None
 
 def setup_google_creds():
-    """Decode base64 Google credentials and create a temporary file."""
     logger.debug("Setting up Google credentials...")
-    if GOOGLE_CREDS_JSON_BASE64:
+    if CONFIG["GOOGLE_CREDS_JSON_BASE64"]:
         try:
-            creds_json = base64.b64decode(GOOGLE_CREDS_JSON_BASE64).decode("utf-8")
-            with open(CREDS_FILE, "w") as f:
+            creds_json = base64.b64decode(CONFIG["GOOGLE_CREDS_JSON_BASE64"]).decode("utf-8")
+            with open(CONFIG["CREDS_FILE"], "w") as f:
                 f.write(creds_json)
             logger.info("Google credentials saved to temporary file")
         except Exception as e:
             logger.error(f"Error decoding Google credentials: {e}")
             raise
-    elif not os.path.exists(CREDS_FILE):
+    elif not os.path.exists(CONFIG["CREDS_FILE"]):
         logger.error("Google credentials file not found, and GOOGLE_CREDS_JSON_BASE64 is not set")
         raise FileNotFoundError("Google credentials file not found")
 
 def get_sheet():
-    """Get cached Google Sheets object."""
     global sheet_cache
     if sheet_cache is None:
         try:
             setup_google_creds()
-            creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPE)
+            creds = Credentials.from_service_account_file(CONFIG["CREDS_FILE"], scopes=SCOPE)
             client = gspread.authorize(creds)
-            sheet_cache = client.open(SPREADSHEET_NAME).sheet1
+            sheet_cache = client.open(CONFIG["SPREADSHEET_NAME"]).sheet1
             logger.info("Successfully connected to Google Sheets")
         except Exception as e:
             logger.error(f"Error connecting to Google Sheets: {e}")
@@ -87,7 +87,6 @@ def get_sheet():
     return sheet_cache
 
 def append_license_to_sheet(license_key: str, username: str):
-    """Append license key to Google Sheets."""
     try:
         sheet = get_sheet()
         utc_plus_2 = timezone(timedelta(hours=2))
@@ -100,7 +99,6 @@ def append_license_to_sheet(license_key: str, username: str):
         raise
 
 def generate_license(length: int = 32) -> str:
-    """Generate a secure license key."""
     try:
         key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
         logger.info(f"Generated license key (first 8 chars): {key[:8]}...")
@@ -110,10 +108,8 @@ def generate_license(length: int = 32) -> str:
         raise
 
 # --- CryptoBot Payment Functions ---
-
 def get_pay_link(amount: str) -> tuple[str, str]:
-    """Create a CryptoBot invoice and return the payment link and invoice ID."""
-    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
+    headers = {"Crypto-Pay-API-Token": CONFIG["CRYPTOBOT_API_TOKEN"]}
     data = {
         "asset": "TON",
         "amount": amount,
@@ -129,9 +125,8 @@ def get_pay_link(amount: str) -> tuple[str, str]:
         return None, None
 
 def check_payment_status(invoice_id: str) -> dict:
-    """Check the status of a CryptoBot invoice."""
     headers = {
-        "Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN,
+        "Crypto-Pay-API-Token": CONFIG["CRYPTOBOT_API_TOKEN"],
         "Content-Type": "application/json"
     }
     try:
@@ -143,13 +138,10 @@ def check_payment_status(invoice_id: str) -> dict:
         return None
 
 # --- Telegram Bot Logic ---
-
 def get_keyboard(buttons: list) -> InlineKeyboardMarkup:
-    """Create an inline keyboard."""
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Welcome message."""
     welcome_text = (
         "🎮 *Добро пожаловать в Valture!*\n\n"
         "Ваш лучший инструмент для игровой производительности! 🚀\n"
@@ -159,7 +151,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Main menu without 'Back' button."""
     query = update.callback_query
     await query.answer()
     buttons = [
@@ -176,7 +167,6 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """About section with 'Back' button."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -199,12 +189,11 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Payment menu with updated price and 'Back' button."""
     query = update.callback_query
     await query.answer()
     text = (
-        "💳 *Покупка лицензии Valture*\n\n"
-        "Цена: *4 TON*\n"
+        f"💳 *Покупка лицензии Valture*\n\n"
+        f"Цена: *{LICENSE_PRICE_TON} TON*\n"
         "Оплата через CryptoBot.\n\n"
         "После оплаты вы получите документ и лицензионный ключ."
     )
@@ -215,22 +204,21 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Initiate CryptoBot payment."""
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat_id
     username = query.from_user.username or query.from_user.full_name
 
     try:
-        pay_link, invoice_id = get_pay_link('4')
+        pay_link, invoice_id = get_pay_link(LICENSE_PRICE_TON)
         if pay_link and invoice_id:
             context.user_data["invoice_id"] = str(invoice_id)
             context.user_data["username"] = username
             context.user_data["chat_id"] = chat_id
             logger.info(f"CryptoBot invoice created: invoice_id={invoice_id}")
             text = (
-                "💸 *Оплатите через CryptoBot*\n\n"
-                "Нажмите ниже для оплаты *4 TON*:\n"
+                f"💸 *Оплатите через CryptoBot*\n\n"
+                f"Нажмите ниже для оплаты *{LICENSE_PRICE_TON} TON*:\n"
                 f"[Оплатить через CryptoBot]({pay_link})\n\n"
                 "После оплаты нажмите 'Проверить оплату'."
             )
@@ -267,7 +255,6 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Check CryptoBot payment status."""
     query = update.callback_query
     await query.answer()
     chat_id = context.user_data.get("chat_id", query.message.chat_id)
@@ -357,7 +344,6 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Support menu with 'Back' button."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -370,7 +356,6 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """FAQ with brief answers and 'Back' button."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -386,7 +371,6 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """News section with 'Back' button."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -398,7 +382,6 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button presses."""
     query = update.callback_query
     data = query.data
     await query.answer()
@@ -421,14 +404,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await news(update, context)
 
 if __name__ == "__main__":
-    # Start Flask in a separate thread
     Thread(target=run_flask).start()
-
-    # Start the bot
-    application = Application.builder().token(BOT_TOKEN).build()
-
+    application = Application.builder().token(CONFIG["BOT_TOKEN"]).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
-
     logger.info("Valture bot started")
     application.run_polling()
