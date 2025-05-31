@@ -14,6 +14,10 @@ from threading import Thread, Timer
 from uuid import uuid4
 from yookassa import Configuration, Payment
 import sqlite3
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения
+load_dotenv()
 
 # --- Настройки ---
 # Цены, ссылка на приложение и новости
@@ -370,7 +374,7 @@ def test_sheets(message):
         logger.info(f"Тестовая запись {test_key} добавлена")
         bot.reply_to(message, f"✅ Успешно записан тестовый ключ: {test_key}!")
     except Exception as e:
-        logger.error(f"Ошибка при тестировании Google Sheets: {test_key} }")
+        logger.error(f"Ошибка при тестировании Google Sheets: {str(e)}")
         bot.reply_to(message, f"❌ Ошибка при тестировании: {str(e)}")
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -520,7 +524,7 @@ def button_handler(call):
                     parse_mode="Markdown",
                     reply_markup=markup
                 )
-                return False
+                return
 
             invoice_id = invoice["invoice_id"]
             pay_url = invoice["pay_url"]
@@ -610,7 +614,7 @@ def button_handler(call):
                     parse_mode="Markdown",
                     reply_markup=markup
                 )
-                return False
+                return
 
             payment_id = payment.id
             confirmation_url = payment.confirmation.confirmation_url
@@ -622,7 +626,7 @@ def button_handler(call):
             }
             logger.info(f"YooKassa платеж создан: payment_id={payment_id}")
 
-            # Сохраняем платеж в базу
+            # Сохраняем платеж в базе
             conn = sqlite3.connect('transactions.db')
             cursor = conn.cursor()
             cursor.execute('''
@@ -676,7 +680,7 @@ def button_handler(call):
                 parse_mode="Markdown",
                 reply_markup=markup
             )
-            return False
+            return
 
         payment_type = invoices[chat_id]['payment_type']
         username = invoices[chat_id]['username']
@@ -718,7 +722,7 @@ def button_handler(call):
                             disable_web_page_preview=True
                         )
                         conn.close()
-                        return False
+                        return
 
                     hwid_key = generate_license()
                     sheet_success = append_license_to_sheet(hwid_key, username)
@@ -797,7 +801,7 @@ def button_handler(call):
                             disable_web_page_preview=True
                         )
                         conn.close()
-                        return False
+                        return
 
                     hwid_key = generate_license()
                     sheet_success = append_license_to_sheet(hwid_key, username)
