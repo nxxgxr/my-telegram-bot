@@ -3,10 +3,8 @@ import logging
 import secrets
 import requests
 import base64
-import json
 from datetime import datetime, timezone, timedelta
 from threading import Thread
-from uuid import uuid4
 
 from flask import Flask, request, jsonify
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -22,7 +20,8 @@ CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN")
 CREDS_FILE = os.environ.get("CREDS_FILE")
 SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME")
 GOOGLE_CREDS_JSON_BASE64 = os.environ.get("GOOGLE_CREDS_JSON_BASE64")
-PAYMENT_AMOUNT = 0.01  # Цена в TON, изменить здесь для настройки
+PAYMENT_AMOUNT = 4.0  # Сохранено для совместимости, не используется
+TEST_PAYMENT_AMOUNT = 0.01  # Цена для тестового раздела в TON
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
@@ -125,50 +124,43 @@ def append_license_to_sheet(license_key, username):
         logger.error(f"Ошибка при добавлении HWID-ключа: {e}")
         raise
 
-def create_crypto_invoice(amount):
-    """Создание инвойса через CryptoBot."""
+def get_pay_link(amount):
+    """Создание инвойса через CryptoBot (из bot пример.py)."""
     headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
     data = {
         "asset": "TON",
         "amount": str(amount),
-        "description": "Valture License"
+        "description": "Valture Test License"
     }
     try:
         response = requests.post(f"{CRYPTO_BOT_API}/createInvoice", headers=headers, json=data, timeout=10)
-        logger.debug(f"Создание инвойса: HTTP статус: {response.status_code}, Ответ: {response.text}")
+        logger.debug(f"Создание тестового инвойса: HTTP статус: {response.status_code}, Ответ: {response.text}")
         if response.ok:
             response_data = response.json()
-            logger.info(f"Инвойс успешно создан: invoice_id={response_data['result']['invoice_id']}")
+            logger.info(f"Тестовый инвойс создан: invoice_id={response_data['result']['invoice_id']}")
             return response_data['result']['pay_url'], response_data['result']['invoice_id']
-        logger.error(f"Ошибка API при создании инвойса: {response.status_code}, {response.text}")
+        logger.error(f"Ошибка API при создании тестового инвойса: {response.status_code}, {response.text}")
         return None, None
     except Exception as e:
-        logger.error(f"Ошибка при создании инвойса: {e}, Ответ: {response.text if 'response' in locals() else 'нет ответа'}")
+        logger.error(f"Ошибка при создании тестового инвойса: {e}")
         return None, None
 
-def check_invoice_status(invoice_id):
-    """Проверка статуса инвойса CryptoBot (копия check_payment_status из bot пример.py)."""
+def check_payment_status(invoice_id):
+    """Проверка статуса инвойса (из bot пример.py)."""
     headers = {
         "Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN,
         "Content-Type": "application/json"
     }
-    logger.debug(f"Начало проверки инвойса: invoice_id={invoice_id}")
+    logger.debug(f"Начало проверки тестового инвойса: invoice_id={invoice_id}")
     try:
         response = requests.post(f"{CRYPTO_BOT_API}/getInvoices", headers=headers, json={}, timeout=10)
-        logger.debug(f"Проверка статуса инвойса {invoice_id}: HTTP статус: {response.status_code}, Ответ: {response.text}")
+        logger.debug(f"Проверка тестового инвойса {invoice_id}: HTTP статус: {response.status_code}, Ответ: {response.text}")
         if response.ok:
             return response.json()
-        logger.error(f"Ошибка API при проверке инвойса: {response.status_code}, {response.text}")
-        if response.status_code == 401:
-            logger.error("Неверный CRYPTOBOT_API_TOKEN")
-        elif response.status_code == 429:
-            logger.error("Превышен лимит запросов к CryptoBot API")
-        return None
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Сетевая ошибка при проверке инвойса: {e}")
+        logger.error(f"Ошибка API при проверке тестового инвойса: {response.status_code}, {response.text}")
         return None
     except Exception as e:
-        logger.error(f"Критическая ошибка при проверке инвойса: {e}")
+        logger.error(f"Ошибка при проверке тестового инвойса: {e}")
         return None
 
 def get_keyboard(buttons):
@@ -192,7 +184,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = [
         ("ℹ️ О Valture", "menu_about"),
         ("📰 Новости", "menu_news"),
-        ("💳 Купить лицензию", "menu_pay"),
+        ("🧪 Тестовая оплата", "menu_test_pay"),
         ("❓ FAQ", "menu_faq"),
         ("📞 Поддержка", "menu_support"),
     ]
@@ -217,47 +209,47 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🛡️ Стабильный фреймрейт: Забудьте о лагах и просадках FPS — Valture обеспечивает плавный игровой процесс.\n"
         "💡 Молниеносная отзывчивость: Сократите время отклика системы, чтобы каждый ваш клик или движение были мгновенными.\n"
         "🔋 Оптимизация Windows: Полная настройка операционной системы для максимальной производительности в играх.\n"
-        "🛳️  Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
-        "🖥️  Плавность картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
+        "🛳️ Плавность управления: Улучшенная точность и четкость мыши для идеального контроля в любой ситуации.\n"
+        "🖥️ Плавность картинки в играх: Наслаждайтесь четкой и плавной картинкой, которая погружает вас в игру.\n\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "_Создано для геймеров, которые ценят качество и стремятся к победе._"
     )
     buttons = [("🔙 Назад в главное меню", "menu_main")]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Меню оплаты."""
+async def test_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню тестовой оплаты."""
     query = update.callback_query
     await query.answer()
-    buttons = [(f"💳 Оплатить {PAYMENT_AMOUNT} TON", f"get_{PAYMENT_AMOUNT}")]
+    buttons = [(f"💰 Оплатить {TEST_PAYMENT_AMOUNT} TON", f"get_test_{TEST_PAYMENT_AMOUNT}")]
     await query.edit_message_text(
-        f"💳 *Покупка лицензии Valture*\n\n"
-        f"Нажмите кнопку ниже, чтобы оплатить {PAYMENT_AMOUNT} TON за лицензию.",
+        f"🧪 *Тестовая покупка лицензии Valture*\n\n"
+        f"Нажмите кнопку ниже, чтобы оплатить {TEST_PAYMENT_AMOUNT} TON за тестовую лицензию.",
         parse_mode="Markdown",
         reply_markup=get_keyboard(buttons)
     )
 
-async def get_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Создание инвойса для оплаты."""
+async def get_test_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Создание тестового инвойса для оплаты."""
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat.id
     username = query.from_user.username or query.from_user.full_name
 
     try:
-        pay_url, invoice_id = create_crypto_invoice(PAYMENT_AMOUNT)
+        pay_url, invoice_id = get_pay_link(TEST_PAYMENT_AMOUNT)
         if pay_url and invoice_id:
             invoices[chat_id] = invoice_id
-            logger.info(f"Инвойс создан для {username}: invoice_id={invoice_id}")
+            logger.info(f"Тестовый инвойс создан для {username}: invoice_id={invoice_id}")
             text = (
                 f"💸 *Оплатите через CryptoBot*\n\n"
-                f"Нажмите ниже для оплаты *{PAYMENT_AMOUNT} TON*:\n"
+                f"Нажмите ниже для оплаты *{TEST_PAYMENT_AMOUNT} TON*:\n"
                 f"[Оплатить через CryptoBot]({pay_url})\n\n"
                 "После оплаты нажмите 'Проверить оплату'."
             )
             buttons = [
-                (f"Оплатить {PAYMENT_AMOUNT} TON", f"url_{pay_url}"),
-                ("✅ Проверить оплату", f"check_payment_{invoice_id}"),
+                (f"Оплатить {TEST_PAYMENT_AMOUNT} TON", f"url_{pay_url}"),
+                ("✅ Проверить оплату", f"check_test_payment_{invoice_id}"),
                 ("🔙 Назад в главное меню", "menu_main")
             ]
             await query.edit_message_text(
@@ -271,82 +263,79 @@ async def get_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 disable_web_page_preview=True
             )
         else:
-            logger.error("Не удалось создать счет на оплату")
+            logger.error("Не удалось создать тестовый счет на оплату")
             await query.answer("❌ Не удалось создать счет на оплату.", show_alert=True)
             await query.edit_message_text(
                 "❌ *Не удалось создать счет на оплату!*\n\nПопробуйте снова или свяжитесь с @s3pt1ck.",
                 parse_mode="Markdown",
                 reply_markup=get_keyboard([
-                    ("🔄 Попробовать снова", f"get_{PAYMENT_AMOUNT}"),
+                    ("🔄 Попробовать снова", f"get_test_{TEST_PAYMENT_AMOUNT}"),
                     ("🔙 Назад в главное меню", "menu_main")
                 ])
             )
     except Exception as e:
-        logger.error(f"Ошибка при создании инвойса: {e}", exc_info=True)
+        logger.error(f"Ошибка при создании тестового инвойса: {e}", exc_info=True)
         await query.answer("❌ Не удалось создать счет на оплату.", show_alert=True)
         await query.edit_message_text(
             "❌ *Не удалось создать счет на оплату!*\n\nПопробуйте снова или свяжитесь с @s3pt1ck.",
             parse_mode="Markdown",
             reply_markup=get_keyboard([
-                ("🔄 Попробовать снова", f"get_{PAYMENT_AMOUNT}"),
+                ("🔄 Попробовать снова", f"get_test_{TEST_PAYMENT_AMOUNT}"),
                 ("🔙 Назад в главное меню", "menu_main")
             ])
         )
 
-async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка статуса оплаты и выдача HWID-ключа."""
+async def check_test_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка статуса тестовой оплаты и выдача HWID-ключа."""
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat.id
-    invoice_id = query.data.split("check_payment_")[1]
+    invoice_id = query.data.split("check_test_payment_")[1]
     username = query.from_user.username or query.from_user.full_name
 
-    logger.debug(f"Начало проверки оплаты: chat_id={chat_id}, invoice_id={invoice_id}, username={username}")
+    logger.debug(f"Начало проверки тестовой оплаты: chat_id={chat_id}, invoice_id={invoice_id}, username={username}")
     try:
-        payment_status = check_invoice_status(invoice_id)
-        logger.debug(f"Результат проверки инвойса: {payment_status}")
-
+        payment_status = check_payment_status(invoice_id)
+        logger.debug(f"Результат проверки тестового инвойса: {payment_status}")
         if payment_status and payment_status.get('ok', False):
-            logger.debug("Ответ API: ok=True")
             if 'items' in payment_status.get('result', {}):
-                logger.debug(f"Найдено {len(payment_status['result']['items'])} инвойсов")
                 invoice = next((inv for inv in payment_status['result']['items'] if str(inv['invoice_id']) == invoice_id), None)
                 if invoice:
                     status = invoice.get('status')
-                    logger.debug(f"Статус инвойса {invoice_id}: {status}")
+                    logger.debug(f"Статус тестового инвойса {invoice_id}: {status}")
                     if status == 'paid':
                         hwid_key = generate_license()
                         append_license_to_sheet(hwid_key, username)
                         text = (
-                            "🎉 *Поздравляем с покупкой!*\n\n"
+                            "🎉 *Поздравляем с тестовой покупкой!*\n\n"
                             "Ваш HWID-ключ:\n"
                             f"`{hwid_key}`\n\n"
                             "Сохраните его в надежном месте! 🚀"
                         )
                         buttons = [("🏠 Назад в главное меню", "menu_main")]
-                        logger.info(f"Оплата подтверждена, HWID-ключ выдан: {hwid_key} для {username}")
+                        logger.info(f"Тестовая оплата подтверждена, HWID-ключ выдан: {hwid_key} для {username}")
                         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
                         if chat_id in invoices:
                             del invoices[chat_id]
                     else:
-                        logger.warning(f"Оплата не подтверждена для invoice_id={invoice_id}, статус: {status}")
+                        logger.warning(f"Тестовая оплата не подтверждена: invoice_id={invoice_id}, статус: {status}")
                         await query.answer("❌ Оплата не найдена.", show_alert=True)
                         await query.edit_message_text(
                             "❌ *Оплата не найдена*\n\nЗавершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck, если нужна помощь.",
                             parse_mode="Markdown",
                             reply_markup=get_keyboard([
-                                ("🔄 Проверить снова", f"check_payment_{invoice_id}"),
+                                ("🔄 Проверить снова", f"check_test_payment_{invoice_id}"),
                                 ("🔙 Назад в главное меню", "menu_main")
                             ])
                         )
                 else:
-                    logger.error(f"Счет не найден для invoice_id={invoice_id}")
+                    logger.error(f"Тестовый счет не найден для invoice_id={invoice_id}")
                     await query.answer("❌ Счет не найден.", show_alert=True)
                     await query.edit_message_text(
                         "❌ *Счет не найден.*\n\nПопробуйте снова или свяжитесь с @s3pt1ck.",
                         parse_mode="Markdown",
                         reply_markup=get_keyboard([
-                            ("🔄 Проверить снова", f"check_payment_{invoice_id}"),
+                            ("🔄 Проверить снова", f"check_test_payment_{invoice_id}"),
                             ("🔙 Назад в главное меню", "menu_main")
                         ])
                     )
@@ -357,7 +346,7 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "❌ *Ошибка при проверке оплаты!*\n\nПопробуйте снова или свяжитесь с @s3pt1ck.",
                     parse_mode="Markdown",
                     reply_markup=get_keyboard([
-                        ("🔄 Проверить снова", f"check_payment_{invoice_id}"),
+                        ("🔄 Проверить снова", f"check_test_payment_{invoice_id}"),
                         ("🔙 Назад в главное меню", "menu_main")
                     ])
                 )
@@ -368,18 +357,18 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "❌ *Ошибка при проверке оплаты!*\n\nПопробуйте снова или свяжитесь с @s3pt1ck.",
                 parse_mode="Markdown",
                 reply_markup=get_keyboard([
-                    ("🔄 Проверить снова", f"check_payment_{invoice_id}"),
+                    ("🔄 Проверить снова", f"check_test_payment_{invoice_id}"),
                     ("🔙 Назад в главное меню", "menu_main")
                 ])
             )
     except Exception as e:
-        logger.error(f"Критическая ошибка при проверке оплаты: {e}", exc_info=True)
+        logger.error(f"Критическая ошибка при проверке тестовой оплаты: {e}", exc_info=True)
         await query.answer("❌ Ошибка при получении статуса оплаты.", show_alert=True)
         await query.edit_message_text(
             "❌ *Ошибка при проверке оплаты!*\n\nПопробуйте снова или свяжитесь с @s3pt1ck.",
             parse_mode="Markdown",
             reply_markup=get_keyboard([
-                ("🔄 Проверить снова", f"check_payment_{invoice_id}"),
+                ("🔄 Проверить снова", f"check_test_payment_{invoice_id}"),
                 ("🔙 Назад в главное меню", "menu_main")
             ])
         )
@@ -404,7 +393,7 @@ async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "❓ *Часто задаваемые вопросы*\n\n"
         "🔹 *Как получить лицензию?*\n"
-        "Перейдите в 'Купить лицензию' и выберите способ оплаты.\n\n"
+        "Перейдите в 'Тестовая оплата' и выберите способ оплаты.\n\n"
         "🔹 *Что делать, если ключ не работает?*\n"
         "Напишите в поддержку @s3pt1ck.\n\n"
         "🔹 *Можно ли использовать ключ на нескольких устройствах?*\n"
@@ -432,12 +421,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "menu_main":
         await main_menu(update, context)
-    elif data == "menu_pay":
-        await pay(update, context)
-    elif data.startswith("get_"):
-        await get_payment(update, context)
-    elif data.startswith("check_payment_"):
-        await check_payment(update, context)
+    elif data == "menu_test_pay":
+        await test_pay(update, context)
+    elif data.startswith("get_test_"):
+        await get_test_payment(update, context)
+    elif data.startswith("check_test_payment_"):
+        await check_test_payment(update, context)
     elif data == "menu_support":
         await support(update, context)
     elif data == "menu_faq":
