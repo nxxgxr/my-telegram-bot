@@ -475,7 +475,7 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         logger.debug(f"Creating CryptoBot invoice for user: {username} (ID: {user_id})")
-        invoice, error = create_crypto_invoice(amount=4.0, asset="TON", description="HWID Key")
+        invoice, error = create_crypto_invoice(amount=0.01, asset="TON", description="HWID Key")
         if not invoice:
             error_msg = (
                 "❌ *Ошибка при создании инвойса!*\n\n"
