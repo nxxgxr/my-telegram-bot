@@ -2,6 +2,7 @@ import os
 import logging
 import secrets
 import requests
+import base64
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 import gspread
@@ -9,27 +10,32 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime, timezone, timedelta
 from threading import Thread
 from flask import Flask, jsonify
+import tempfile
 
 # --- Settings ---
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CRYPTOBOT_API_TOKEN = os.environ.get("CRYPTOBOT_API_TOKEN")
-CREDS_FILE = os.environ.get("CREDS_FILE")
 SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME")
 GOOGLE_CREDS_JSON_BASE64 = os.environ.get("GOOGLE_CREDS_JSON_BASE64")
+CREDS_FILE = os.path.join(tempfile.gettempdir(), "google_creds.json")
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
-
-# CryptoBot API endpoint
 CRYPTO_BOT_API = "https://pay.crypt.bot/api"
+
+# Validate environment variables
+REQUIRED_ENV_VARS = ["BOT_TOKEN", "CRYPTOBOT_API_TOKEN", "SPREADSHEET_NAME"]
+for var in REQUIRED_ENV_VARS:
+    if not os.environ.get(var):
+        raise ValueError(f"Missing required environment variable: {var}")
 
 # --- Logging ---
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.DEBUG
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -41,16 +47,6 @@ app = Flask(__name__)
 def home():
     return "✅ Valture bot is running!"
 
-@app.route('/test-crypto-api')
-def test_crypto_api():
-    """Debug endpoint to test CryptoBot API connectivity."""
-    try:
-        headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
-        response = requests.get(f"{CRYPTO_BOT_API}/getMe", headers=headers, timeout=10)
-        return f"API Response: {response.json()}"
-    except Exception as e:
-        return f"Error: {str(e)}"
-
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
@@ -61,21 +57,19 @@ sheet_cache = None
 
 def setup_google_creds():
     """Decode base64 Google credentials and create a temporary file."""
-    logger.debug("Checking Google credentials...")
+    logger.debug("Setting up Google credentials...")
     if GOOGLE_CREDS_JSON_BASE64:
         try:
             creds_json = base64.b64decode(GOOGLE_CREDS_JSON_BASE64).decode("utf-8")
             with open(CREDS_FILE, "w") as f:
                 f.write(creds_json)
-            logger.info("Google credentials successfully decoded and saved to temporary file")
+            logger.info("Google credentials saved to temporary file")
         except Exception as e:
             logger.error(f"Error decoding Google credentials: {e}")
             raise
     elif not os.path.exists(CREDS_FILE):
         logger.error("Google credentials file not found, and GOOGLE_CREDS_JSON_BASE64 is not set")
-        raise FileNotFoundError("Google credentials file not found, and GOOGLE_CREDS_JSON_BASE64 is not set")
-    else:
-        logger.info("Using existing Google credentials file")
+        raise FileNotFoundError("Google credentials file not found")
 
 def get_sheet():
     """Get cached Google Sheets object."""
@@ -92,7 +86,7 @@ def get_sheet():
             raise
     return sheet_cache
 
-def append_license_to_sheet(license_key, username):
+def append_license_to_sheet(license_key: str, username: str):
     """Append license key to Google Sheets."""
     try:
         sheet = get_sheet()
@@ -100,16 +94,16 @@ def append_license_to_sheet(license_key, username):
         now_utc_plus_2 = datetime.now(utc_plus_2)
         now_str = now_utc_plus_2.strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([license_key, "", username, now_str])
-        logger.info(f"License {license_key} added for {username}")
+        logger.info(f"License {license_key[:8]}... added for {username}")
     except Exception as e:
         logger.error(f"Error appending license: {e}")
         raise
 
-def generate_license(length=32):
+def generate_license(length: int = 32) -> str:
     """Generate a secure license key."""
     try:
         key = ''.join(secrets.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(length))
-        logger.info(f"Generated key: {key}")
+        logger.info(f"Generated license key (first 8 chars): {key[:8]}...")
         return key
     except Exception as e:
         logger.error(f"Error generating key: {e}")
@@ -117,78 +111,40 @@ def generate_license(length=32):
 
 # --- CryptoBot Payment Functions ---
 
-@bot.callback_query_handler(func=lambda call: call.data == 'get_0.01')
-def get_invoice(call):
-    chat_id = call.message.chat.id
-    pay_link, invoice_id = get_pay_link('0.01')
-    if pay_link and invoice_id:
-        invoices[chat_id] = invoice_id 
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton(text="Оплатить 0.01 TON", url=pay_link))
-        markup.add(types.InlineKeyboardButton(text="Проверить оплату", callback_data=f'check_payment_{invoice_id}'))
-        bot.send_message(chat_id, "Перейдите по этой ссылке для оплаты и нажмите 'Проверить оплату'", reply_markup=markup)
-    else:
-        bot.answer_callback_query(call.id, 'Ошибка: Не удалось создать счет на оплату.')
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('check_payment_'))
-def check_payment(call):
-    chat_id = call.message.chat.id
-    invoice_id = call.data.split('check_payment_')[1]
-    payment_status = check_payment_status(invoice_id)
-    if payment_status and payment_status.get('ok'):
-        if 'items' in payment_status['result']:
-            invoice = next((inv for inv in payment_status['result']['items'] if str(inv['invoice_id']) == invoice_id), None)
-            if invoice:
-                status = invoice['status']
-                if status == 'paid':
-                    bot.send_message(chat_id, "Оплата прошла успешно!✅")
-                    # Убедитесь, что файл 'qw.docx' находится в той же директории
-                    with open('qw.docx', 'rb') as document:
-                        bot.send_document(chat_id, document)
-                    # Чтобы избежать дублирования счетов, удалим его из списка
-                    del invoices[chat_id]
-                    bot.answer_callback_query(call.id)
-                else:
-                    bot.answer_callback_query(call.id, 'Оплата не найдена❌', show_alert=True)
-            else:
-                bot.answer_callback_query(call.id, 'Счет не найден.', show_alert=True)
-        else:
-            print(f"Ответ от API не содержит ключа 'items': {payment_status}")
-            bot.answer_callback_query(call.id, 'Ошибка при получении статуса оплаты.', show_alert=True)
-    else:
-        print(f"Ошибка при запросе статуса оплаты: {payment_status}")
-        bot.answer_callback_query(call.id, 'Ошибка при получении статуса оплаты.', show_alert=True)
-
-def get_pay_link(amount):
-    headers = {"Crypto-Pay-API-Token": API_TOKEN}
+def get_pay_link(amount: str) -> tuple[str, str]:
+    """Create a CryptoBot invoice and return the payment link and invoice ID."""
+    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
     data = {
         "asset": "TON",
         "amount": amount,
         "description": "Valture License"
     }
-    response = requests.post('https://pay.crypt.bot/api/createInvoice', headers=headers, json=data)
-    if response.ok:
+    try:
+        response = requests.post(f"{CRYPTO_BOT_API}/createInvoice", headers=headers, json=data, timeout=10)
+        response.raise_for_status()
         response_data = response.json()
         return response_data['result']['pay_url'], response_data['result']['invoice_id']
-    return None, None
+    except requests.RequestException as e:
+        logger.error(f"Error creating invoice: {e}")
+        return None, None
 
-def check_payment_status(invoice_id):
+def check_payment_status(invoice_id: str) -> dict:
+    """Check the status of a CryptoBot invoice."""
     headers = {
-        "Crypto-Pay-API-Token": API_TOKEN,
+        "Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN,
         "Content-Type": "application/json"
     }
-    response = requests.post('https://pay.crypt.bot/api/getInvoices', headers=headers, json={})
-    
-    if response.ok:
+    try:
+        response = requests.post(f"{CRYPTO_BOT_API}/getInvoices", headers=headers, json={}, timeout=10)
+        response.raise_for_status()
         return response.json()
-    else:
-        print(f"Ошибка при запросе к API: {response.status_code}, {response.text}")
+    except requests.RequestException as e:
+        logger.error(f"Error checking payment status: {e}")
         return None
-
 
 # --- Telegram Bot Logic ---
 
-def get_keyboard(buttons):
+def get_keyboard(buttons: list) -> InlineKeyboardMarkup:
     """Create an inline keyboard."""
     return InlineKeyboardMarkup([[InlineKeyboardButton(text, callback_data=callback)] for text, callback in buttons])
 
@@ -263,16 +219,15 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat_id
-    user_id = query.from_user.id
     username = query.from_user.username or query.from_user.full_name
 
     try:
-        pay_link, invoice_id = get_pay_link('0.01')
+        pay_link, invoice_id = get_pay_link('4')
         if pay_link and invoice_id:
-            context.user_data["invoice_id"] = str(invoice_id)  # Ensure invoice_id is stored as string
+            context.user_data["invoice_id"] = str(invoice_id)
             context.user_data["username"] = username
             context.user_data["chat_id"] = chat_id
-            logger.info(f"CryptoBot invoice created: invoice_id={invoice_id}, pay_url={pay_link}")
+            logger.info(f"CryptoBot invoice created: invoice_id={invoice_id}")
             text = (
                 "💸 *Оплатите через CryptoBot*\n\n"
                 "Нажмите ниже для оплаты *4 TON*:\n"
@@ -290,7 +245,7 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 disable_web_page_preview=True
             )
         else:
-            error_msg = (
+            text = (
                 "❌ *Не удалось создать счет на оплату!*\n\n"
                 "Попробуйте снова или свяжитесь с @s3pt1ck."
             )
@@ -298,18 +253,18 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ("🔄 Попробовать снова", "pay_crypto"),
                 ("🔙 Назад к способам оплаты", "menu_pay")
             ]
-            await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
     except Exception as e:
-        logger.error(f"Error initiating CryptoBot payment: {e}", exc_info=True)
-        error_msg = (
-            "❌ *Что-то сломалось!*\n\n"
-            "Не удалось обработать запрос. Попробуйте снова или свяжитесь с @s3pt1ck."
+        logger.error(f"Error initiating payment: {e}", exc_info=True)
+        text = (
+            "❌ *Ошибка!*\n\n"
+            "Попробуйте снова или свяжитесь с @s3pt1ck."
         )
         buttons = [
             ("🔄 Попробовать снова", "pay_crypto"),
             ("🔙 Назад к способам оплаты", "menu_pay")
         ]
-        await query.edit_message_text(error_msg, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
 async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Check CryptoBot payment status."""
@@ -355,7 +310,6 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             parse_mode="Markdown",
                             reply_markup=get_keyboard([("🏠 Назад в главное меню", "menu_main")])
                         )
-                        # Send document
                         try:
                             with open('qw.docx', 'rb') as document:
                                 await context.bot.send_document(chat_id, document)
@@ -368,7 +322,6 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             )
                         context.user_data.clear()
                     else:
-                        logger.warning(f"Payment not confirmed for invoice_id={invoice_id}, status={status}")
                         text = (
                             "⏳ *Оплата еще не подтверждена*\n\n"
                             "Завершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck, если нужна помощь."
@@ -448,6 +401,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button presses."""
     query = update.callback_query
     data = query.data
+    await query.answer()
 
     if data == "menu_main":
         await main_menu(update, context)
