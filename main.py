@@ -265,32 +265,59 @@ def create_crypto_invoice(amount, asset="TON", description="HWID Key"):
 def check_invoice_status(invoice_id):
     """Проверка статуса инвойса CryptoBot."""
     logger.debug(f"Проверка статуса инвойса: invoice_id={invoice_id}")
+    if not invoice_id:
+        logger.error("Invoice ID отсутствует")
+        return None, "Invoice ID отсутствует"
+    
+    if not CRYPTOBOT_API_TOKEN:
+        logger.error("CRYPTOBOT_API_TOKEN не задан")
+        return None, "CRYPTOBOT_API_TOKEN не задан"
+
     try:
         headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
         response = requests.get(f"{CRYPTO_BOT_API}/getInvoices?invoice_ids={invoice_id}", headers=headers, timeout=10)
         logger.debug(f"HTTP статус: {response.status_code}, Ответ: {response.text}")
         response.raise_for_status()
         data = response.json()
-        if data.get("ok"):
-            status = data["result"]["items"][0]["status"]
-            logger.info(f"Статус инвойса {invoice_id}: {status}")
-            return status
-        else:
-            logger.error(f"Ошибка проверки статуса инвойса: {data.get('error', 'Неизвестная ошибка')}")
-            return None
+
+        if not data.get("ok"):
+            error_msg = data.get("error", "Неизвестная ошибка от CryptoBot")
+            logger.error(f"Ошибка API CryptoBot: {error_msg}")
+            return None, f"Ошибка API: {error_msg}"
+
+        items = data.get("result", {}).get("items", [])
+        if not items:
+            logger.error(f"Пустой список инвойсов для invoice_id={invoice_id}")
+            return None, "Пустой ответ от API"
+
+        status = items[0].get("status")
+        if not status:
+            logger.error(f"Статус инвойса отсутствует в ответе для invoice_id={invoice_id}")
+            return None, "Статус инвойса отсутствует"
+
+        logger.info(f"Статус инвойса {invoice_id}: {status}")
+        return status, None
+
     except requests.exceptions.HTTPError as http_err:
         logger.error(f"HTTP ошибка при проверке инвойса: {http_err}, Ответ: {response.text}")
-        return None
+        if response.status_code == 401:
+            return None, "Недействительный CRYPTOBOT_API_TOKEN"
+        elif response.status_code == 429:
+            return None, "Превышен лимит запросов к CryptoBot API"
+        return None, f"HTTP ошибка: {http_err}"
+    except requests.exceptions.Timeout:
+        logger.error("Тайм-аут при обращении к CryptoBot API")
+        return None, "Тайм-аут запроса к CryptoBot API"
     except requests.exceptions.RequestException as req_err:
         logger.error(f"Сетевая ошибка при проверке инвойса: {req_err}")
-        return None
+        return None, f"Сетевая ошибка: {req_err}"
     except Exception as e:
         logger.error(f"Общая ошибка при проверке инвойса: {e}")
-        return None
+        return None, f"Общая ошибка: {str(e)}"
 
 def create_yookassa_payment(amount, description, user_id, username):
     """Создание платежа через YooKassa."""
-    logger.debug(f"Создание YooKassa платежа: amount={amount}, description={user_id}")
+    logger.debug(f"Создание YooKassa платежа: amount={amount}, description={description}, user_id={user_id}")
     if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
         logger.error("YOOKASSA_SHOP_ID или YOOKASSA_SECRET_KEY не заданы")
         return None, "YooKassa credentials not configured"
@@ -433,7 +460,7 @@ async def pay_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "После оплаты нажмите 'Подтвердить оплату' для получения ключа."
         )
         buttons = [
-            ("✅ Подтвердить оплату", "pay_verify"),
+            ("✅ Подтвердить оплату", "pay_crypto_confirm"),
             ("🔙 Назад к способам оплаты", "menu_pay")
         ]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons), disable_web_page_preview=True)
@@ -485,7 +512,21 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
         buttons = [("🔙 Назад к способам оплаты", "menu_pay")]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-        status = check_invoice_status(invoice_id)
+        status, error = check_invoice_status(invoice_id)
+        if error:
+            logger.error(f"Ошибка при проверке инвойса: {error}")
+            text = (
+                f"❌ *Не удалось проверить оплату!*\n\n"
+                f"Ошибка: {error}.\n"
+                "Попробуйте снова или свяжитесь с @s3pt1ck."
+            )
+            buttons = [
+                ("🔄 Проверить снова", "pay_crypto_confirm"),
+                ("🔙 Назад к способам оплаты", "menu_pay")
+            ]
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+            return
+
         if status == "paid":
             hwid = generate_license()
             append_license_to_sheet(hwid, username)
@@ -511,10 +552,11 @@ async def pay_crypto_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE)
             ]
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
     except Exception as e:
-        logger.error(f"Ошибка при проверке CryptoBot оплаты: {e}", exc_info=True)
+        logger.error(f"Критическая ошибка в pay_crypto_confirm: {e}", exc_info=True)
         text = (
-            "❌ *Что-то пошло не так!*\n\n"
-            "Не удалось проверить оплату. Попробуйте снова или свяжитесь с @s3pt1ck."
+            f"❌ *Критическая ошибка!*\n\n"
+            f"Ошибка: {str(e)}.\n"
+            "Попробуйте снова или свяжитесь с @s3pt1ck."
         )
         buttons = [
             ("🔄 Проверить снова", "pay_crypto"),
@@ -630,13 +672,27 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buttons = [("🔙 Назад к способам оплаты", "menu_pay")]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
 
-        status = check_invoice_status(invoice_id)
+        status, error = check_invoice_status(invoice_id)
+        if error:
+            logger.error(f"Ошибка при проверке инвойса: {error}")
+            text = (
+                f"❌ *Не удалось проверить оплату!*\n\n"
+                f"Ошибка: {error}.\n"
+                "Попробуйте снова или свяжитесь с @s3pt1ck."
+            )
+            buttons = [
+                ("🔄 Проверить снова", "pay_verify"),
+                ("🔙 Назад к способам оплаты", "menu_pay")
+            ]
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
+            return
+
         if status == "paid":
             license_key = generate_license()
             append_license_to_sheet(license_key, username)
             text = (
                 "🎉 *Поздравляем с покупкой!*\n\n"
-                "Ваш лицензионный ключ:\n"
+                "Ваш HWID ключ:\n"
                 f"`{license_key}`\n\n"
                 "Сохраните его в надежном месте! 🚀"
             )
@@ -651,18 +707,19 @@ async def pay_verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Завершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck, если нужна помощь."
             )
             buttons = [
-                ("🔄 Проверить снова", "pay_crypto_confirm"),
+                ("🔄 Проверить снова", "pay_verify"),
                 ("🔙 Назад к способам оплаты", "menu_pay")
             ]
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
     except Exception as e:
         logger.error(f"Ошибка при проверке CryptoBot оплаты: {e}", exc_info=True)
         text = (
-            "❌ *Что-то пошло не так!*\n\n"
-            "Не удалось проверить оплату. Попробуйте снова или свяжитесь с @s3pt1ck."
+            f"❌ *Критическая ошибка!*\n\n"
+            f"Ошибка: {str(e)}.\n"
+            "Попробуйте снова или свяжитесь с @s3pt1ck."
         )
         buttons = [
-            ("🔄 Проверить снова", "pay_crypto"),
+            ("🔄 Проверить снова", "pay_verify"),
             ("🔙 Назад к способам оплаты", "menu_pay")
         ]
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=get_keyboard(buttons))
