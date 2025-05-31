@@ -109,7 +109,6 @@ def generate_license(length: int = 32) -> str:
 
 # --- CryptoBot Payment Functions ---
 def get_pay_link(amount: str) -> tuple[str, str]:
--stars
     headers = {"Crypto-Pay-API-Token": CONFIG["CRYPTOBOT_API_TOKEN"]}
     data = {
         "asset": "TON",
@@ -320,7 +319,7 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     context.user_data.clear()
                 else:
                     text = (
-                        "⏳ *Оплата еще не подтверждена*\n\n"
+                        f"⏳ *Оплата еще не подтверждена*\n\n"
                         f"Статус: {status}\n"
                         "Завершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck, если нужна помощь."
                     )
