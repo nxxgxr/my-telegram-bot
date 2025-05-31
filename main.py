@@ -109,6 +109,7 @@ def generate_license(length: int = 32) -> str:
 
 # --- CryptoBot Payment Functions ---
 def get_pay_link(amount: str) -> tuple[str, str]:
+-stars
     headers = {"Crypto-Pay-API-Token": CONFIG["CRYPTOBOT_API_TOKEN"]}
     data = {
         "asset": "TON",
@@ -129,12 +130,22 @@ def check_payment_status(invoice_id: str) -> dict:
         "Crypto-Pay-API-Token": CONFIG["CRYPTOBOT_API_TOKEN"],
         "Content-Type": "application/json"
     }
+    data = {
+        "invoice_ids": [invoice_id]
+    }
     try:
-        response = requests.post(f"{CRYPTO_BOT_API}/getInvoices", headers=headers, json={}, timeout=10)
+        response = requests.post(f"{CRYPTO_BOT_API}/getInvoices", headers=headers, json=data, timeout=10)
         response.raise_for_status()
         return response.json()
+    except requests.HTTPError as e:
+        logger.error(f"HTTP error checking payment status for invoice {invoice_id}: {e}, status: {e.response.status_code}")
+        if e.response.status_code == 401:
+            logger.error("Invalid CryptoBot API token")
+        elif e.response.status_code == 429:
+            logger.error("Rate limit exceeded")
+        return None
     except requests.RequestException as e:
-        logger.error(f"Error checking payment status: {e}")
+        logger.error(f"Error checking payment status for invoice {invoice_id}: {e}")
         return None
 
 # --- Telegram Bot Logic ---
@@ -279,52 +290,49 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.debug(f"Checking payment for invoice_id={invoice_id}, response: {payment_status}")
         if payment_status and payment_status.get('ok'):
             if 'items' in payment_status['result'] and payment_status['result']['items']:
-                invoice = next((inv for inv in payment_status['result']['items'] if str(inv['invoice_id']) == str(invoice_id)), None)
-                if invoice:
-                    status = invoice['status']
-                    logger.debug(f"Invoice {invoice_id} status: {status}")
-                    if status == 'paid':
-                        license_key = generate_license()
-                        append_license_to_sheet(license_key, username)
-                        text = (
-                            "🎉 *Поздравляем с покупкой!*\n\n"
-                            "Ваш лицензионный ключ:\n"
-                            f"`{license_key}`\n\n"
-                            "Сохраните его в надежном месте! 🚀"
+                invoice = payment_status['result']['items'][0]  # Single invoice expected due to invoice_ids filter
+                status = invoice['status']
+                logger.debug(f"Invoice {invoice_id} status: {status}")
+                if status == 'paid':
+                    license_key = generate_license()
+                    append_license_to_sheet(license_key, username)
+                    text = (
+                        "🎉 *Поздравляем с покупкой!*\n\n"
+                        "Ваш лицензионный ключ:\n"
+                        f"`{license_key}`\n\n"
+                        "Сохраните его в надежном месте! 🚀"
+                    )
+                    await query.edit_message_text(
+                        text,
+                        parse_mode="Markdown",
+                        reply_markup=get_keyboard([("🏠 Назад в главное меню", "menu_main")])
+                    )
+                    try:
+                        with open('qw.docx', 'rb') as document:
+                            await context.bot.send_document(chat_id, document)
+                        logger.info(f"Document sent to {username} (chat_id: {chat_id})")
+                    except FileNotFoundError:
+                        logger.error("Document 'qw.docx' not found")
+                        await context.bot.send_message(
+                            chat_id,
+                            "❌ Не удалось отправить документ. Свяжитесь с @s3pt1ck."
                         )
-                        await query.edit_message_text(
-                            text,
-                            parse_mode="Markdown",
-                            reply_markup=get_keyboard([("🏠 Назад в главное меню", "menu_main")])
-                        )
-                        try:
-                            with open('qw.docx', 'rb') as document:
-                                await context.bot.send_document(chat_id, document)
-                            logger.info(f"Document sent to {username} (chat_id: {chat_id})")
-                        except FileNotFoundError:
-                            logger.error("Document 'qw.docx' not found")
-                            await context.bot.send_message(
-                                chat_id,
-                                "❌ Не удалось отправить документ. Свяжитесь с @s3pt1ck."
-                            )
-                        context.user_data.clear()
-                    else:
-                        text = (
-                            "⏳ *Оплата еще не подтверждена*\n\n"
-                            "Завершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck, если нужна помощь."
-                        )
-                        buttons = [
-                            ("🔄 Проверить снова", f"check_payment_{invoice_id}"),
-                            ("🔙 Назад к способам оплаты", "menu_pay")
-                        ]
-                        await query.edit_message_text(
-                            text,
-                            parse_mode="Markdown",
-                            reply_markup=get_keyboard(buttons)
-                        )
+                    context.user_data.clear()
                 else:
-                    logger.error(f"Invoice {invoice_id} not found in API response")
-                    await query.answer("Счет не найден.", show_alert=True)
+                    text = (
+                        "⏳ *Оплата еще не подтверждена*\n\n"
+                        f"Статус: {status}\n"
+                        "Завершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck, если нужна помощь."
+                    )
+                    buttons = [
+                        ("🔄 Проверить снова", f"check_payment_{invoice_id}"),
+                        ("🔙 Назад к способам оплаты", "menu_pay")
+                    ]
+                    await query.edit_message_text(
+                        text,
+                        parse_mode="Markdown",
+                        reply_markup=get_keyboard(buttons)
+                    )
             else:
                 logger.error(f"API response missing 'items' or empty: {payment_status}")
                 await query.answer("Ошибка: Ответ от API не содержит данных об оплате.", show_alert=True)
@@ -334,8 +342,8 @@ async def check_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error verifying payment for invoice_id={invoice_id}: {e}", exc_info=True)
         text = (
-            "❌ *Что-то пошло не так!*\n\n"
-            "Не удалось проверить оплату. Попробуйте снова или свяжитесь с @s3pt1ck."
+            "❌ *Ошибка при проверке оплаты!*\n\n"
+            "Попробуйте снова или свяжитесь с @s3pt1ck."
         )
         buttons = [
             ("🔄 Проверить снова", f"check_payment_{invoice_id}"),
