@@ -233,4 +233,3 @@ def check_payment_status(invoice_id):
 if __name__ == '__main__':
     logger.info("Бот запущен")
     bot.polling(non_stop=True)
-```
