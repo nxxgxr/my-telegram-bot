@@ -1,3 +1,4 @@
+```python
 import telebot
 from telebot import types
 import requests
@@ -21,8 +22,8 @@ YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID")
 YOOKASSA_SECRET_KEY = os.environ.get("YOOKASSA_SECRET_KEY")
 CREDS_FILE = os.environ.get("CREDS_FILE", "valture-license-bot-account.json")
 SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME", "Valture_Licenses")
-TEST_PAYMENT_AMOUNT = 0.01  # TON for CryptoBot
-YOOKASSA_AMOUNT = 1000.0  # RUB for YooKassa
+TEST_PAYMENT_AMOUNT = 0.1  # TON for CryptoBot
+YOOKASSA_AMOUNT = 1.0  # RUB for YooKassa
 
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -73,7 +74,6 @@ def yookassa_webhook():
                 logger.error(f"Missing metadata: user_id={user_id}, username={username}")
                 return jsonify({"status": "error", "message": "Missing metadata"}), 400
 
-            # Process payment synchronously for simplicity
             try:
                 license_key = generate_license()
                 append_license_to_sheet(license_key, username)
@@ -86,7 +86,9 @@ def yookassa_webhook():
                     ),
                     parse_mode="Markdown"
                 )
-                logger.info(f"YooKassa payment processed: {license_key} for {username}")
+                logger.info(f"YooKassa payment processed via webhook: {license_key} for {username}")
+                if user_id in invoices and invoices[user_id]['payment_type'] == 'yookassa':
+                    del invoices[user_id]
             except Exception as e:
                 logger.error(f"Error processing YooKassa payment {payment_id}: {e}")
                 bot.send_message(
@@ -248,6 +250,17 @@ def create_yookassa_payment(amount, description, user_id, username):
     except Exception as e:
         logger.error(f"Ошибка создания YooKassa платежа: {e}")
         return None, f"YooKassa ошибка: {str(e)}"
+
+def check_yookassa_payment_status(payment_id):
+    logger.debug(f"Проверка YooKassa платежа: payment_id={payment_id}")
+    try:
+        payment = Payment.find_one(payment_id)
+        status = payment.status
+        logger.info(f"Статус платежа {payment_id}: {status}")
+        return status
+    except Exception as e:
+        logger.error(f"Ошибка проверки YooKassa платежа: {e}")
+        return None
 
 # --- Логика бота ---
 @bot.message_handler(commands=['start'])
@@ -462,13 +475,14 @@ def button_handler(call):
 
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(text="Оплатить 1000 RUB", url=confirmation_url))
+            markup.add(types.InlineKeyboardButton(text="✅ Подтвердить оплату", callback_data='pay_verify'))
             markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
             bot.edit_message_text(
                 (
                     "💳 *Оплатите через YooKassa*\n\n"
                     "Нажмите ниже для оплаты *1000 RUB*:\n"
                     f"[Оплатить через YooKassa]({confirmation_url})\n\n"
-                    "Ключ будет отправлен автоматически после оплаты."
+                    "После оплаты подтвердите ниже или дождитесь автоматической обработки."
                 ),
                 chat_id=chat_id,
                 message_id=message_id,
@@ -493,13 +507,13 @@ def button_handler(call):
             )
 
     elif data == "pay_verify":
-        if chat_id not in invoices or invoices[chat_id]['payment_type'] != 'crypto':
+        if chat_id not in invoices:
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
             bot.edit_message_text(
                 (
                     "❌ *Ошибка!*\n\n"
-                    "Эта кнопка только для CryptoBot. YooKassa подтверждается автоматически."
+                    "Данные об оплате отсутствуют. Начните оплату заново."
                 ),
                 chat_id=chat_id,
                 message_id=message_id,
@@ -508,7 +522,7 @@ def button_handler(call):
             )
             return
 
-        invoice_id = invoices[chat_id]['invoice_id']
+        payment_type = invoices[chat_id]['payment_type']
         username = invoices[chat_id]['username']
 
         try:
@@ -522,51 +536,102 @@ def button_handler(call):
                 reply_markup=markup
             )
 
-            status = check_invoice_status(invoice_id)
-            if status == "paid":
-                hwid_key = generate_license()
-                sheet_success = append_license_to_sheet(hwid_key, username)
-                markup = types.InlineKeyboardMarkup()
-                markup.add(types.InlineKeyboardButton(text="🏠 Назад в главное меню", callback_data='menu_main'))
-                if sheet_success:
-                    bot.edit_message_text(
-                        (
-                            "🎉 *Поздравляем с покупкой!*\n\n"
-                            f"HWID-ключ:\n`{hwid_key}`\n\nСохраните его! 🚀"
-                        ),
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        parse_mode="Markdown",
-                        reply_markup=markup
-                    )
+            if payment_type == 'crypto':
+                invoice_id = invoices[chat_id]['invoice_id']
+                status = check_invoice_status(invoice_id)
+                if status == "paid":
+                    hwid_key = generate_license()
+                    sheet_success = append_license_to_sheet(hwid_key, username)
+                    markup = types.InlineKeyboardMarkup()
+                    markup.add(types.InlineKeyboardButton(text="🏠 Назад в главное меню", callback_data='menu_main'))
+                    if sheet_success:
+                        bot.edit_message_text(
+                            (
+                                "🎉 *Поздравляем с покупкой!*\n\n"
+                                f"HWID-ключ:\n`{hwid_key}`\n\nСохраните его! 🚀"
+                            ),
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            parse_mode="Markdown",
+                            reply_markup=markup
+                        )
+                    else:
+                        bot.edit_message_text(
+                            (
+                                "🎉 *Поздравляем с покупкой!*\n\n"
+                                f"HWID-ключ:\n`{hwid_key}`\n\nСохраните его! 🚀\n\n"
+                                "⚠️ Не удалось записать ключ в таблицу. Свяжитесь с @s3pt1ck."
+                            ),
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            parse_mode="Markdown",
+                            reply_markup=markup
+                        )
+                    logger.info(f"CryptoBot оплата подтверждена: {hwid_key} для {username}")
+                    del invoices[chat_id]
                 else:
+                    markup = types.InlineKeyboardMarkup()
+                    markup.add(types.InlineKeyboardButton(text="🔄 Проверить снова", callback_data='pay_verify'))
+                    markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
                     bot.edit_message_text(
                         (
-                            "🎉 *Поздравляем с покупкой!*\n\n"
-                            f"HWID-ключ:\n`{hwid_key}`\n\nСохраните его! 🚀\n\n"
-                            "⚠️ Не удалось записать ключ в таблицу. Свяжитесь с @s3pt1ck."
+                            "⏳ *Оплата еще не подтверждена*\n\n"
+                            "Завершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck."
                         ),
                         chat_id=chat_id,
                         message_id=message_id,
                         parse_mode="Markdown",
                         reply_markup=markup
                     )
-                logger.info(f"Оплата подтверждена: {hwid_key} для {username}")
-                del invoices[chat_id]
-            else:
-                markup = types.InlineKeyboardMarkup()
-                markup.add(types.InlineKeyboardButton(text="🔄 Проверить снова", callback_data='pay_verify'))
-                markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
-                bot.edit_message_text(
-                    (
-                        "⏳ *Оплата еще не подтверждена*\n\n"
-                        "Завершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck."
-                    ),
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    parse_mode="Markdown",
-                    reply_markup=markup
-                )
+
+            elif payment_type == 'yookassa':
+                payment_id = invoices[chat_id]['payment_id']
+                status = check_yookassa_payment_status(payment_id)
+                if status == "succeeded":
+                    hwid_key = generate_license()
+                    sheet_success = append_license_to_sheet(hwid_key, username)
+                    markup = types.InlineKeyboardMarkup()
+                    markup.add(types.InlineKeyboardButton(text="🏠 Назад в главное меню", callback_data='menu_main'))
+                    if sheet_success:
+                        bot.edit_message_text(
+                            (
+                                "🎉 *Поздравляем с покупкой!*\n\n"
+                                f"HWID-ключ:\n`{hwid_key}`\n\nСохраните его! 🚀"
+                            ),
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            parse_mode="Markdown",
+                            reply_markup=markup
+                        )
+                    else:
+                        bot.edit_message_text(
+                            (
+                                "🎉 *Поздравляем с покупкой!*\n\n"
+                                f"HWID-ключ:\n`{hwid_key}`\n\nСохраните его! 🚀\n\n"
+                                "⚠️ Не удалось записать ключ в таблицу. Свяжитесь с @s3pt1ck."
+                            ),
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            parse_mode="Markdown",
+                            reply_markup=markup
+                        )
+                    logger.info(f"YooKassa оплата подтверждена: {hwid_key} для {username}")
+                    del invoices[chat_id]
+                else:
+                    markup = types.InlineKeyboardMarkup()
+                    markup.add(types.InlineKeyboardButton(text="🔄 Проверить снова", callback_data='pay_verify'))
+                    markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
+                    bot.edit_message_text(
+                        (
+                            "⏳ *Оплата еще не подтверждена*\n\n"
+                            "Завершите оплату или попробуйте снова. Свяжитесь с @s3pt1ck."
+                        ),
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        parse_mode="Markdown",
+                        reply_markup=markup
+                    )
+
         except Exception as e:
             logger.error(f"Ошибка проверки оплаты: {e}")
             markup = types.InlineKeyboardMarkup()
@@ -622,3 +687,4 @@ if __name__ == '__main__':
     Thread(target=run_flask).start()
     logger.info("Бот запущен")
     bot.polling(non_stop=True)
+```
