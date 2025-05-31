@@ -117,42 +117,74 @@ def generate_license(length=32):
 
 # --- CryptoBot Payment Functions ---
 
+@bot.callback_query_handler(func=lambda call: call.data == 'get_0.01')
+def get_invoice(call):
+    chat_id = call.message.chat.id
+    pay_link, invoice_id = get_pay_link('0.01')
+    if pay_link and invoice_id:
+        invoices[chat_id] = invoice_id 
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(text="Оплатить 0.01 TON", url=pay_link))
+        markup.add(types.InlineKeyboardButton(text="Проверить оплату", callback_data=f'check_payment_{invoice_id}'))
+        bot.send_message(chat_id, "Перейдите по этой ссылке для оплаты и нажмите 'Проверить оплату'", reply_markup=markup)
+    else:
+        bot.answer_callback_query(call.id, 'Ошибка: Не удалось создать счет на оплату.')
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('check_payment_'))
+def check_payment(call):
+    chat_id = call.message.chat.id
+    invoice_id = call.data.split('check_payment_')[1]
+    payment_status = check_payment_status(invoice_id)
+    if payment_status and payment_status.get('ok'):
+        if 'items' in payment_status['result']:
+            invoice = next((inv for inv in payment_status['result']['items'] if str(inv['invoice_id']) == invoice_id), None)
+            if invoice:
+                status = invoice['status']
+                if status == 'paid':
+                    bot.send_message(chat_id, "Оплата прошла успешно!✅")
+                    # Убедитесь, что файл 'qw.docx' находится в той же директории
+                    with open('qw.docx', 'rb') as document:
+                        bot.send_document(chat_id, document)
+                    # Чтобы избежать дублирования счетов, удалим его из списка
+                    del invoices[chat_id]
+                    bot.answer_callback_query(call.id)
+                else:
+                    bot.answer_callback_query(call.id, 'Оплата не найдена❌', show_alert=True)
+            else:
+                bot.answer_callback_query(call.id, 'Счет не найден.', show_alert=True)
+        else:
+            print(f"Ответ от API не содержит ключа 'items': {payment_status}")
+            bot.answer_callback_query(call.id, 'Ошибка при получении статуса оплаты.', show_alert=True)
+    else:
+        print(f"Ошибка при запросе статуса оплаты: {payment_status}")
+        bot.answer_callback_query(call.id, 'Ошибка при получении статуса оплаты.', show_alert=True)
+
 def get_pay_link(amount):
-    """Create a payment link via CryptoBot."""
-    headers = {"Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN}
+    headers = {"Crypto-Pay-API-Token": API_TOKEN}
     data = {
         "asset": "TON",
-        "amount": str(amount),
+        "amount": amount,
         "description": "Valture License"
     }
-    try:
-        response = requests.post(f"{CRYPTO_BOT_API}/createInvoice", headers=headers, json=data, timeout=10)
-        if response.ok:
-            response_data = response.json()
-            logger.debug(f"Invoice created: {response_data}")
-            return response_data['result']['pay_url'], response_data['result']['invoice_id']
-        logger.error(f"Failed to create invoice: {response.status_code}, {response.text}")
-        return None, None
-    except Exception as e:
-        logger.error(f"Error creating invoice: {e}")
-        return None, None
+    response = requests.post('https://pay.crypt.bot/api/createInvoice', headers=headers, json=data)
+    if response.ok:
+        response_data = response.json()
+        return response_data['result']['pay_url'], response_data['result']['invoice_id']
+    return None, None
 
 def check_payment_status(invoice_id):
-    """Check payment status via CryptoBot."""
     headers = {
-        "Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN,
+        "Crypto-Pay-API-Token": API_TOKEN,
         "Content-Type": "application/json"
     }
-    try:
-        response = requests.post(f"{CRYPTO_BOT_API}/getInvoices", headers=headers, json={}, timeout=10)
-        logger.debug(f"Payment status response: {response.text}")
-        if response.ok:
-            return response.json()
-        logger.error(f"Error checking payment status: {response.status_code}, {response.text}")
+    response = requests.post('https://pay.crypt.bot/api/getInvoices', headers=headers, json={})
+    
+    if response.ok:
+        return response.json()
+    else:
+        print(f"Ошибка при запросе к API: {response.status_code}, {response.text}")
         return None
-    except Exception as e:
-        logger.error(f"Error checking payment status: {e}")
-        return None
+
 
 # --- Telegram Bot Logic ---
 
