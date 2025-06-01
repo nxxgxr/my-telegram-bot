@@ -1,3 +1,4 @@
+import telebot
 from telebot import types
 import requests
 import os
@@ -13,10 +14,6 @@ from threading import Thread, Timer
 from uuid import uuid4
 from yookassa import Configuration, Payment
 import sqlite3
-from dotenv import load_dotenv
-
-# Загружаем переменные окружения
-load_dotenv()
 
 # --- Настройки ---
 # Цены, ссылка на приложение и новости
@@ -406,13 +403,13 @@ def button_handler(call):
                 "✨ *Valture — Ваш путь к совершенству в играх*\n\n"
                 "➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
                 "Valture — это передовой инструмент, созданный для геймеров, которые не готовы мириться с компромиссами.\n\n"
-                "🔥 *Почему выбирают Valture?*\n"
+                "🔥 *Почему выбирают Valture?*\n\n"
                 "🚀 Увеличение FPS на 20–30%.\n"
                 "🛡️ Стабильный фреймрейт.\n"
                 "💡 Молниеносная отзывчивость.\n"
                 "🔋 Оптимизация Windows.\n"
                 "🛳️ Плавность управления.\n"
-                "🖥️ Плавность картинки.\n\n"
+                "🖥️ Плавность.\n\n"
                 "➖️ _Создано для геймеров, которые ценят качество._"
             ),
             chat_id=chat_id,
@@ -435,8 +432,7 @@ def button_handler(call):
         try:
             conn = sqlite3.connect('transactions.db')
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT license_key, timestamp, payment_type FROM transactions WHERE user_id = ? AND status = 'succeeded'",
+            cursor.execute("SELECT license_key, timestamp, payment_type FROM transactions WHERE user_id = ? AND status = 'succeeded'",
                 (chat_id,)
             )
             results = cursor.fetchall()
@@ -444,32 +440,34 @@ def button_handler(call):
 
             markup.add(types.InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data='menu_main'))
             if results:
-                response = "🔑 *Ваши купленные лицензии:*\n\n"
+                response = "🔑 *Ваши покупки*:*\n\n"
                 for key, timestamp, payment_type in results:
                     response += (
-                        f"Ключ: `{key}`\n"
+                        f"response Ключ: `{key}`\n"
                         f"Дата покупки: {timestamp}\n"
-                        f"Тип оплаты: {payment_type.capitalize()}\n\n"
+                        f"Тип: {payment_type.capitalize()}\n"
+                        f"\n\n"
                     )
             else:
-                response = "У вас нет купленных лицензий."
+                response = "У вас нет купленных ключей."
                 
             bot.edit_message_text(
                 response,
                 chat_id=chat_id,
-                message_id=message_id,
                 parse_mode="Markdown",
                 reply_markup=markup
             )
         except Exception as e:
             logger.error(f"Ошибка при получении лицензий: {e}")
-            markup.add(types.InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data='menu_main'))
+            markup.add(
+                types.inlineKeyboardButton(text="🔙 Назад в главное меню", callback_data='menu_main')
+            )
             bot.edit_message_text(
-                "❌ Ошибка при загрузке лицензий. Свяжитесь с @s3pt1ck.",
-                chat_id=chat_id,
-                message_id=message_id,
-                parse_mode="Markdown",
-                reply_markup=markup
+                "❌ Ошибка при загрузке лицензии. Свяжитесь с @s3pt1ck."
+            ),
+            chat_id=chat_id,
+            content_type=message_id,
+            parse_mode="Markdown",
             )
 
     elif data == "menu_pay":
@@ -478,25 +476,26 @@ def button_handler(call):
         markup.add(types.InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data='menu_main'))
         bot.edit_message_text(
             (
-                f"💳 *Покупка лицензии Valture*\n\n"
-                f"Цена: *{CRYPTO_AMOUNT} TON* или *{YOOKASSA_AMOUNT} RUB (~$12.7)*\n"
+                f"💳 Информация о покупке\n\n"
+                f"Цена: **{CRYPTO_AMOUNT}** или **{YOOKASSA_AMOUNT}** (~$10.7)\n"
                 "Выберите способ оплаты:\n"
-                "- *CryptoBot*: Оплата через криптовалюту.\n"
-                "- *YooKassa*: Оплата картой.\n\n"
-                "Ключ и ссылка на приложение будут отправлены после оплаты."
+                "- **CryptoBot**: Оплата через криптовалюту.\n"
+                "- **YooKassa**: Оплата картой.\n\n"
+                "Ключ и ссылка будут отправлены после оплаты.\n"
+                ""
             ),
             chat_id=chat_id,
             message_id=message_id,
             parse_mode="Markdown",
-            reply_markup=markup
-        )
+            reply_to_message_id=markup
+           )
 
     elif data == "pay_crypto":
         markup.add(types.InlineKeyboardButton(text="✅ Подтвердить оплату", callback_data='pay_crypto_confirm'))
         markup.add(types.InlineKeyboardButton(text="🔙 Назад к способам оплаты", callback_data='menu_pay'))
         bot.edit_message_text(
             (
-                f"💸 *Подтверждение оплаты CryptoBot*\n\n"
+                f"💸 *Подтверждение оплаты CryptoBot*\n"
                 f"Вы собираетесь оплатить *{CRYPTO_AMOUNT} TON* за лицензию Valture.\n"
                 "Продолжить оплату?"
             ),
