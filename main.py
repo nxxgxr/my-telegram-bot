@@ -17,17 +17,12 @@ import sqlite3
 
 # --- Настройки ---
 # Цены, ссылка на приложение и новости
-CRYPTO_AMOUNT = 0.01  # TON для CryptoBot
-YOOKASSA_AMOUNT = 1.0  # RUB для YooKassa
+CRYPTO_AMOUNT = 4.0  # TON для CryptoBot
+YOOKASSA_AMOUNT = 1000.0  # RUB для YooKassa
 APP_DOWNLOAD_URL = "https://www.dropbox.com/scl/fi/ze5ebd909z2qeaaucn56q/VALTURE.exe?rlkey=ihdzk8voej4oikrdhq0wfzvbb&st=7lufvad0&dl=1"
 NEWS_TEXT = (
     "📰 *Новости Valture*\n\n"
-    "📢 *Обновление 1.2.3 (01.06.2025)*\n"
-    "- Улучшена оптимизация FPS для новых видеокарт.\n"
-    "- Исправлены баги с мышью в некоторых играх.\n"
-    "- Добавлена поддержка Windows 11 24H2.\n\n"
-    "Скачивайте последнюю версию приложения по ссылке, которая приходит с ключом!\n"
-    "Следите за новостями и пишите в поддержку @s3pt1ck, если есть вопросы."
+    "Новостей пока нет, следите за обновлениями!"
 )
 
 TOKEN = os.environ.get("BOT_TOKEN", 'YOUR_BOT_TOKEN')
@@ -384,8 +379,8 @@ def button_handler(call):
     if data == "menu_main":
         markup.add(types.InlineKeyboardButton(text="ℹ️ О Valture", callback_data='menu_about'))
         markup.add(types.InlineKeyboardButton(text="📰 Новости", callback_data='menu_news'))
-        markup.add(types.InlineKeyboardButton(text="💰 Купленные лицензии", callback_data='menu_licenses'))
         markup.add(types.InlineKeyboardButton(text="💳 Купить лицензию", callback_data='menu_pay'))
+        markup.add(types.InlineKeyboardButton(text="💰 Купленные лицензии", callback_data='menu_licenses'))
         markup.add(types.InlineKeyboardButton(text="❓ FAQ", callback_data='menu_faq'))
         markup.add(types.InlineKeyboardButton(text="📞 Поддержка", callback_data='menu_support'))
         bot.edit_message_text(
