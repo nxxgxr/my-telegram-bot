@@ -5,5 +5,4 @@ flask==2.3.3
 requests==2.31.0
 aiohttp==3.9.1
 yookassa==3.0.1
-telebot
-apscheduler
+APScheduler==3.10.4
